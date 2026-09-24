@@ -40,8 +40,9 @@
   table{border-collapse:collapse;font-size:12.5px;width:100%;}
   th,td{border:1px solid var(--brd);padding:5px 4px;text-align:center;white-space:nowrap;}
   thead th{position:sticky;top:0;background:var(--bg3);z-index:2;}
-  tbody td:first-child,thead th:first-child,tfoot td:first-child{position:sticky;left:0;background:var(--bg2);text-align:left;z-index:3;
-    box-shadow:1px 0 0 var(--brd) inset, -1px 0 0 var(--brd);}
+  tbody td:first-child,thead th:first-child,tfoot td:first-child{position:sticky;left:0;background:var(--bg2) !important;
+    text-align:left;z-index:5;box-shadow:1px 0 0 var(--brd) inset, -1px 0 0 var(--brd);}
+  thead th:first-child{z-index:6;}
   tfoot tr{position:sticky;bottom:0;z-index:2;}
   tfoot td{background:var(--bg3);}
   @media print{ th,td{border:1px solid #999 !important;} }
@@ -87,7 +88,7 @@
 <header>
   <div>
     <h1>大阪急配　シフト表</h1>
-    <div class="ver" id="app-ver">ver 2026-09-24.27</div>
+    <div class="ver" id="app-ver">ver 2026-09-24.28</div>
   </div>
   <div class="row" style="margin-left:auto;">
     <select id="sh-off" class="fi" style="display:none;"></select>
@@ -159,7 +160,7 @@ document.dispatchEvent(new Event('fb-sdk-ready'));
 
 <script>
 'use strict';
-const APP_VER = '2026-09-24.27';
+const APP_VER = '2026-09-24.28';
 console.log('[シフト表] APP_VER', APP_VER);
 
 const FB_CONFIG = {
@@ -526,12 +527,10 @@ function saleLanes(mon){
     const name=shortSaleName(e.name||'セール', media);
     const day=d.getDate();
     const list=(byMedia[media]=byMedia[media]||[]);
-    // ★ 2026-09-24.27: 同じ媒体で日が続くものは1本にまとめる（名前が少し違っても繋げる）
-    const hit=list.find(x=>x.to===day-1 || x.from===day+1 || (day>=x.from&&day<=x.to));
-    if(hit){
-      hit.from=Math.min(hit.from,day); hit.to=Math.max(hit.to,day);
-      if(!hit.names.includes(name)) hit.names.push(name);
-    } else list.push({name, names:[name], from:day, to:day});
+    // ★ 2026-09-24.28: セール名ごとにまとめる（先行と本番は別の帯）
+    const hit=list.find(x=>x.name===name && (x.to===day-1 || x.from===day+1 || (day>=x.from&&day<=x.to)));
+    if(hit){ hit.from=Math.min(hit.from,day); hit.to=Math.max(hit.to,day); }
+    else list.push({name, names:[name], from:day, to:day});
   });
   // 重なるものは段を分ける
   const lanes={};
@@ -573,8 +572,8 @@ function laneRowsHTML(mon, last){
           d+=span;
         } else { tds+=empty; d++; }
       }
-      html+=`<tr><th style="text-align:left;font-size:11px;color:${col};border-color:transparent;">${ri===0?esc(media):''}</th>${tds}
-        <th style="border-color:transparent;background:transparent;"></th><th class="num" style="border-color:transparent;background:transparent;"></th></tr>`;
+      html+=`<tr><th style="text-align:left;font-size:11px;color:${col};background:var(--bg2);">${ri===0?esc(media):''}</th>${tds}
+        <th style="border-color:transparent;background:var(--bg2);"></th><th class="num" style="border-color:transparent;background:var(--bg2);"></th></tr>`;
     });
   });
   return html;
@@ -827,13 +826,13 @@ function saleListHTML(mon, saleMap){
     let days='';
     for(let i=0;i<7;i++){
       const d=ws+i;
-      if(d<1||d>last){ days+='<div style="background:var(--bg);min-height:26px;"></div>'; continue; }
+      if(d<1||d>last){ days+='<div style="background:var(--bg);"></div>'; continue; }
       const iso=`${mon}-${String(d).padStart(2,'0')}`;
       const wd=new Date(iso+'T00:00:00').getDay();
       const hol=holidayName(iso);
       const col=(wd===0||hol)?'#e06666':wd===6?'#6fa8dc':'var(--txt)';
       const bg=(wd===0||hol)?'rgba(224,102,102,.08)':wd===6?'rgba(111,168,220,.08)':'var(--bg2)';
-      days+=`<div style="background:${bg};padding:4px 6px;min-height:26px;font-size:11.5px;font-weight:700;color:${col};">
+      days+=`<div style="background:${bg};padding:4px 6px;font-size:11.5px;font-weight:700;color:${col};">
         ${d}${hol?`<span class="xs" style="color:#e06666;"> ${esc(hol)}</span>`:''}</div>`;
     }
     // その週に掛かる期間を段に積む
@@ -842,23 +841,20 @@ function saleListHTML(mon, saleMap){
       .sort((a,b)=>a.s-b.s || (b.t-b.s)-(a.t-a.s));
     const rows=[];
     wk.forEach(e=>{ let r=rows.find(r=>r.every(x=>e.s>x.t || e.t<x.s)); if(!r){ r=[]; rows.push(r); } r.push(e); });
-    const bars=rows.map(row=>{
-      let cells='';
-      row.sort((a,b)=>a.s-b.s).forEach(e=>{
-        const startCol=(e.s-ws)+1, span=e.t-e.s+1;
-        const c=e.big?'#d9534f':mediaColor(e.media);
-        const cont=e.from<e.s?'〜':'';
-        cells+=`<div style="grid-column:${startCol} / span ${span};background:${c};color:#fff;border-radius:9px;
-          font-size:10.5px;font-weight:${e.big?'800':'700'};padding:2px 8px;margin:1px 2px;
-          white-space:nowrap;overflow:hidden;text-overflow:ellipsis;" title="${esc(e.media)} ${esc(e.name)}">
-          ${cont}${esc(e.media)} ${esc(e.name)}</div>`;
-      });
-      return `<div style="display:grid;grid-template-columns:repeat(7,1fr);">${cells}</div>`;
-    }).join('');
-    return `<div style="border-bottom:1px solid var(--brd);padding-bottom:4px;margin-bottom:4px;">
-      <div style="display:grid;grid-template-columns:repeat(7,1fr);gap:1px;background:var(--brd);">${days}</div>
+    const lanes=rows.length;
+    const bars=rows.map((row, li)=>row.sort((x,z)=>x.s-z.s).map(e=>{
+      const left=((e.s-ws)/7*100), width=((e.t-e.s+1)/7*100);
+      const c=e.big?'#d9534f':mediaColor(e.media);
+      const cont=e.from<e.s?'〜':'';
+      return `<div title="${esc(e.media)} ${esc(e.name)}" style="position:absolute;left:calc(${left}% + 3px);
+        width:calc(${width}% - 6px);top:${26+li*20}px;background:${c};color:#fff;border-radius:9px;
+        font-size:10.5px;font-weight:${e.big?'800':'700'};padding:2px 8px;box-sizing:border-box;
+        white-space:nowrap;overflow:hidden;text-overflow:ellipsis;">${cont}${esc(e.media)} ${esc(e.name)}</div>`;
+    }).join('')).join('');
+    const h=Math.max(84, 30+lanes*20);
+    return `<div style="position:relative;min-height:${h}px;border-bottom:1px solid var(--brd);">
+      <div style="display:grid;grid-template-columns:repeat(7,1fr);gap:1px;background:var(--brd);position:absolute;inset:0;">${days}</div>
       ${bars}
-      ${bars?'':'<div style="height:20px;"></div>'}
     </div>`;
   }).join('');
   return `<div style="margin-top:14px;">
