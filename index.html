@@ -1,0 +1,355 @@
+<!doctype html>
+<html lang="ja">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>大阪急配 シフト表</title>
+<style>
+  :root{
+    --bg:#10141a; --bg2:#161b23; --bg3:#1d232d; --brd:#2b333f; --brd2:#39424f;
+    --txt:#e8edf4; --txt2:#97a3b4; --accent:#2f80ed; --grn:#009c5a; --amb:#e08b1f; --red:#d9534f;
+    --mono:'DM Mono',ui-monospace,Menlo,Consolas,monospace;
+  }
+  :root:not([data-theme="dark"]){ }
+  @media (prefers-color-scheme: light){
+    :root:not([data-theme="dark"]){
+      --bg:#f4f6f9; --bg2:#fff; --bg3:#eef1f6; --brd:#d8dee8; --brd2:#c3ccd9;
+      --txt:#1b2430; --txt2:#5d6b7d;
+    }
+  }
+  *{box-sizing:border-box;}
+  html,body{margin:0;padding:0;background:var(--bg);color:var(--txt);
+    font-family:-apple-system,BlinkMacSystemFont,'Hiragino Sans','Noto Sans JP',sans-serif;}
+  body{padding-top:env(safe-area-inset-top,0px);padding-bottom:env(safe-area-inset-bottom,0px);}
+  header{background:var(--bg2);border-bottom:1px solid var(--brd);padding:10px 14px;
+    display:flex;align-items:center;gap:10px;flex-wrap:wrap;position:sticky;top:0;z-index:5;}
+  h1{font-size:15px;margin:0;font-weight:700;}
+  .ver{font-family:var(--mono);font-size:10px;color:var(--txt2);}
+  .wrap{padding:12px 14px 40px;max-width:100%;}
+  .card{background:var(--bg2);border:1px solid var(--brd);border-radius:8px;padding:12px;margin-bottom:12px;}
+  .fi{background:var(--bg3);border:1px solid var(--brd2);border-radius:5px;padding:6px 9px;color:var(--txt);
+    font-family:inherit;font-size:12px;outline:none;max-width:100%;}
+  .btn{border:1px solid var(--brd2);background:var(--bg3);color:var(--txt);border-radius:6px;
+    padding:6px 12px;font-size:12px;font-weight:700;cursor:pointer;font-family:inherit;}
+  .btn.grn{background:var(--grn);border-color:var(--grn);color:#fff;}
+  .btn.gh{background:transparent;}
+  .row{display:flex;gap:8px;align-items:center;flex-wrap:wrap;}
+  .muted{color:var(--txt2);}
+  .xs{font-size:10.5px;}
+  .tw{overflow:auto;max-height:64vh;border:1px solid var(--brd);border-radius:6px;}
+  table{border-collapse:collapse;font-size:11px;width:100%;}
+  th,td{border:1px solid var(--brd);padding:3px 4px;text-align:center;white-space:nowrap;}
+  thead th{position:sticky;top:0;background:var(--bg3);z-index:2;}
+  tbody td:first-child,thead th:first-child{position:sticky;left:0;background:var(--bg2);text-align:left;z-index:1;}
+  tfoot td{background:var(--bg3);font-weight:700;}
+  .cell{cursor:pointer;user-select:none;}
+  .al{border-radius:6px;padding:10px 12px;font-size:12px;margin-bottom:10px;}
+  .al-w{background:rgba(224,139,31,.12);border:1px solid rgba(224,139,31,.4);}
+  .al-e{background:rgba(217,83,79,.12);border:1px solid rgba(217,83,79,.4);}
+  .mono{font-family:var(--mono);}
+</style>
+</head>
+<body>
+<header>
+  <div>
+    <h1>大阪急配　シフト表</h1>
+    <div class="ver" id="app-ver">ver 2026-09-24.1</div>
+  </div>
+  <div class="row" style="margin-left:auto;">
+    <select id="sh-off" class="fi"></select>
+    <input type="month" id="sh-mon" class="fi">
+    <span id="fb-state" class="xs muted">接続中…</span>
+  </div>
+</header>
+
+<div class="wrap">
+  <div class="card">
+    <div id="sh-root"><div class="al al-w">読み込み中です…</div></div>
+  </div>
+</div>
+
+<script type="module">
+import { initializeApp } from "https://www.gstatic.com/firebasejs/10.12.0/firebase-app.js";
+import { getDatabase, ref, set, onValue } from "https://www.gstatic.com/firebasejs/10.12.0/firebase-database.js";
+import { getAuth, signInAnonymously, onIdTokenChanged } from "https://www.gstatic.com/firebasejs/10.12.0/firebase-auth.js";
+window._fbImports = { initializeApp, getDatabase, ref, set, onValue, getAuth, signInAnonymously, onIdTokenChanged };
+document.dispatchEvent(new Event('fb-sdk-ready'));
+</script>
+
+<script>
+'use strict';
+const APP_VER = '2026-09-24.1';
+console.log('[シフト表] APP_VER', APP_VER);
+
+const FB_CONFIG = {
+  apiKey: "AIzaSyDDsNZnlG3swyRtuCbMjkUkZpH4X68gUiI",
+  authDomain: "osq-report-3db91.firebaseapp.com",
+  databaseURL: "https://osq-report-3db91-default-rtdb.asia-southeast1.firebasedatabase.app",
+  projectId: "osq-report-3db91",
+  storageBucket: "osq-report-3db91.firebasestorage.app",
+  messagingSenderId: "86627546503",
+  appId: "1:86627546503:web:62d338fb75ebaa91bbcf22"
+};
+
+const $ = id => document.getElementById(id);
+const esc = v => String(v==null?'':v).replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
+const lsGet = (k, d) => { try{ const v=localStorage.getItem(k); return v?JSON.parse(v):d; }catch(e){ return d; } };
+const lsSet = (k, v) => { try{ localStorage.setItem(k, JSON.stringify(v)); }catch(e){} };
+const _ymNorm = v => String(v||'').replace(/\//g,'-').slice(0,7);
+
+// ── データ（経営管理と同じFirebaseを見る） ──
+const D = {
+  staff: lsGet('nikki_staff_full', []) || [],
+  locations: lsGet('nikki_locations', []) || [],
+  departments: lsGet('nikki_departments', []) || [],
+  delivery: lsGet('nikki_delivery', []) || [],
+  shifts: lsGet('nikki_shifts', {}) || {},
+};
+let fbDB = null;
+
+function setState(txt, ok){
+  const el=$('fb-state'); if(!el) return;
+  el.textContent = txt;
+  el.style.color = ok ? 'var(--grn)' : 'var(--txt2)';
+}
+async function initFirebase(){
+  const { initializeApp, getDatabase, getAuth, signInAnonymously, onIdTokenChanged, ref, onValue } = window._fbImports || {};
+  if(!initializeApp){ setState('接続できません（オフライン表示）', false); render(); return; }
+  const app = initializeApp(FB_CONFIG, 'kyuhai-shift');
+  try{
+    const auth = getAuth(app);
+    await new Promise(res=>{
+      let done=false;
+      onIdTokenChanged(auth, u=>{ if(u && !done){ done=true; res(); } });
+      signInAnonymously(auth).catch(e=>console.warn('匿名認証に失敗', e));
+      setTimeout(()=>{ if(!done){ done=true; res(); } }, 12000);
+    });
+  }catch(e){ console.warn('認証に失敗', e); }
+  fbDB = getDatabase(app);
+  const sub = (node, key, cb) => {
+    onValue(ref(fbDB, 'nikki/'+node), snap=>{
+      if(!snap.exists()) return;
+      const v=snap.val();
+      D[key] = Array.isArray(v) ? v : (key==='shifts' ? (v||{}) : (v ? Object.values(v) : []));
+      lsSet('nikki_'+node, D[key]);
+      if(cb) cb();
+    }, err=>console.warn('['+node+']', err && err.message));
+  };
+  sub('staff_full','staff', render);
+  sub('locations','locations', fillOffices);
+  sub('departments','departments', fillOffices);
+  sub('delivery','delivery', render);
+  sub('shifts','shifts', render);
+  setState('接続済み', true);
+}
+async function fbSet(node, value){
+  lsSet('nikki_'+node, value);
+  if(!fbDB) return false;
+  const { ref, set } = window._fbImports;
+  try{ await set(ref(fbDB, 'nikki/'+node), value); return true; }
+  catch(e){ console.warn('保存に失敗', e); return false; }
+}
+
+// ══ シフト表 ══
+const SHIFT_CODES = ['', '〇', '×', '1', '2', '3', '~1', '~2', '~3'];
+const SHIFT_LABEL = {'':'', '〇':'〇', '×':'×', '1':'①', '2':'②', '3':'③', '~1':'〜①', '~2':'〜②', '~3':'〜③'};
+const SHIFT_WEIGHT_DEF = {'〇':1, '×':0, '1':0.3, '2':0.2, '3':0.2, '~1':0.3, '~2':0.5, '~3':1};
+const weights = () => ({...SHIFT_WEIGHT_DEF, ...(lsGet('shift_weights', null)||{})});
+const shKey = (office, mon) => `${office}__${mon}`;
+const shGet = (office, mon) => (D.shifts||{})[shKey(office,mon)] || {cells:{}, updatedAt:null};
+
+function delDeptId(){
+  const d=(D.departments||[]).find(x=>x && x.type==='del');
+  return d ? d.id : null;
+}
+function delOffices(){
+  const id=delDeptId();
+  let locs=(D.locations||[]).filter(l=>l && l.active!==false);
+  if(id!=null) locs=locs.filter(l=>!(l.deptIds||[]).length || (l.deptIds||[]).map(String).includes(String(id)));
+  return locs.sort((a,b)=>(a.order||99)-(b.order||99)).map(l=>l.name);
+}
+function staffOf(office){
+  return (D.staff||[]).filter(s=>{
+    if(!s || s.status==='終了') return false;
+    if(s.office===office) return true;
+    return (s.subOffices||[]).some(o=>(typeof o==='string'?o:o?.name)===office);
+  }).sort((a,b)=>String(a.empNo||'').localeCompare(String(b.empNo||'')));
+}
+// 直近6か月の平均持出（実績2か月以内・実績なしは新人80個）
+function avgMochidashi(st, mon){
+  const base=new Date((mon||new Date().toISOString().slice(0,7))+'-01');
+  const from=new Date(base.getFullYear(), base.getMonth()-6, 1);
+  const rows=(D.delivery||[]).filter(r=>{
+    if(!r || r.staff!==st.name) return false;
+    const d=new Date(String(r.date||'').replace(/\//g,'-')+'T00:00:00');
+    return !isNaN(d) && d>=from && d<base;
+  });
+  if(!rows.length) return {avg:80, isNew:true};
+  const months=new Set(rows.map(r=>String(r.date).slice(0,7))).size;
+  if(months<=2) return {avg:80, isNew:true};
+  const tot=rows.reduce((a,r)=>a+(Number(r.mochidashi)||0),0);
+  const avg=Math.round(tot/rows.length);
+  return {avg: avg>0?avg:80, isNew: avg<=0};
+}
+let _filling=false;
+function fillOffices(){
+  const sel=$('sh-off'); if(!sel || _filling) return;
+  _filling=true;
+  const cur=sel.value;
+  const offs=delOffices();
+  sel.innerHTML=offs.map(n=>`<option value="${esc(n)}">${esc(n)}</option>`).join('');
+  if(cur && offs.includes(cur)) sel.value=cur;
+  _filling=false;
+  render();
+}
+function render(){
+  const root=$('sh-root'); if(!root) return;
+  if(!$('sh-mon').value) $('sh-mon').value=new Date().toISOString().slice(0,7);
+  const office=$('sh-off').value||'', mon=_ymNorm($('sh-mon').value||'');
+  if(!office){ root.innerHTML='<div class="al al-w">営業所がまだ読み込めていません。少し待って再読み込みしてください。</div>'; return; }
+  const staff=staffOf(office);
+  if(!staff.length){ root.innerHTML=`<div class="al al-w">${esc(office)} に所属する従事員が台帳にありません。</div>`; return; }
+  const [y,m]=mon.split('-').map(Number);
+  const last=new Date(y,m,0).getDate();
+  const W='日月火水木金土';
+  const data=shGet(office, mon);
+  const wgt=weights();
+  let head='<tr><th style="min-width:110px;">氏名</th>';
+  for(let d=1; d<=last; d++){
+    const dow=new Date(`${mon}-${String(d).padStart(2,'0')}T00:00:00`).getDay();
+    const col=dow===0?'color:#e06666;':dow===6?'color:#6fa8dc;':'';
+    head+=`<th style="${col}min-width:26px;">${d}<div class="xs" style="${col}">${W[dow]}</div></th>`;
+  }
+  head+='<th>休</th><th class="num">平均持出</th></tr>';
+  let body='';
+  staff.forEach(st=>{
+    const av=avgMochidashi(st, mon);
+    let off=0, tds='';
+    for(let d=1; d<=last; d++){
+      const key=`${st.id}|${d}`;
+      const v=data.cells?.[key]||'';
+      if(v==='×') off++;
+      tds+=`<td class="cell" data-k="${key}" data-v="${v}" onclick="cycle(this)" style="${cellStyle(v)}">${SHIFT_LABEL[v]||''}</td>`;
+    }
+    body+=`<tr data-staff="${st.id}">
+      <td>${esc(st.name)}<div class="xs muted mono">${esc(st.empNo||'')}</div></td>
+      ${tds}
+      <td class="off">${off}</td>
+      <td class="num">${av.avg}${av.isNew?'<div class="xs" style="color:var(--amb)">新人</div>':''}</td>
+    </tr>`;
+  });
+  let foot='<tr><td>人数</td>';
+  for(let d=1; d<=last; d++){
+    let n=0;
+    staff.forEach(st=>{ n += (wgt[data.cells?.[`${st.id}|${d}`]||'']||0); });
+    foot+=`<td class="people" data-d="${d}">${n?Math.round(n*10)/10:''}</td>`;
+  }
+  foot+='<td></td><td class="num"></td></tr>';
+  root.innerHTML=`
+    <div class="xs muted" style="margin-bottom:6px;">
+      ますをタップすると 〇 → × → ① → ② → ③ → 〜① → 〜② → 〜③ → 空 の順に変わります。<br>
+      〇=終日／×=休／①②③=その便のみ／〜①〜②〜③=その便まで。人数は重み（終日1・〜②0.5・①0.3・②③0.2）で数えています。
+    </div>
+    <div class="tw"><table id="sh-table"><thead>${head}</thead><tbody>${body}</tbody><tfoot>${foot}</tfoot></table></div>
+    <div class="row" style="justify-content:flex-end;margin-top:10px;">
+      <span class="xs muted" style="margin-right:auto;">${data.updatedAt?`最終更新 ${new Date(data.updatedAt).toLocaleString('ja-JP')}`:'未保存'}</span>
+      <button class="btn gh" onclick="weekly()">曜日で一括設定</button>
+      <button class="btn gh" onclick="printSheet()">印刷（数量なし）</button>
+      <button class="btn grn" onclick="save()">シフトを保存</button>
+    </div>`;
+}
+function cellStyle(v){
+  if(v==='×') return 'background:rgba(128,128,128,.18);';
+  if(v && v!=='〇') return 'background:rgba(224,139,31,.18);';
+  return '';
+}
+function cycle(td){
+  const i=SHIFT_CODES.indexOf(td.dataset.v||'');
+  const next=SHIFT_CODES[(i+1)%SHIFT_CODES.length];
+  td.dataset.v=next; td.textContent=SHIFT_LABEL[next]||'';
+  td.setAttribute('style', cellStyle(next));
+  recalc();
+}
+function recalc(){
+  const wgt=weights();
+  document.querySelectorAll('#sh-table tbody tr').forEach(tr=>{
+    let off=0;
+    tr.querySelectorAll('.cell').forEach(td=>{ if((td.dataset.v||'')==='×') off++; });
+    const c=tr.querySelector('.off'); if(c) c.textContent=off;
+  });
+  document.querySelectorAll('#sh-table tfoot .people').forEach(td=>{
+    const d=td.dataset.d; let n=0;
+    document.querySelectorAll('#sh-table tbody tr').forEach(tr=>{
+      const cell=tr.querySelector(`.cell[data-k$="|${d}"]`);
+      if(cell) n += (wgt[cell.dataset.v||'']||0);
+    });
+    td.textContent = n ? Math.round(n*10)/10 : '';
+  });
+}
+function weekly(){
+  const name=prompt('どの従事員に入れますか？（氏名の一部。空欄なら全員）','');
+  if(name===null) return;
+  const dowStr=prompt('曜日を入力してください（例：日 または 土日）','日');
+  if(dowStr===null || !dowStr.trim()) return;
+  const code=prompt('入れる記号（〇 × 1 2 3 ~1 ~2 ~3）','×');
+  if(code===null) return;
+  const c=String(code).trim();
+  if(!SHIFT_CODES.includes(c)){ alert('記号が正しくありません'); return; }
+  const W='日月火水木金土';
+  const dows=[...dowStr.trim()].map(ch=>W.indexOf(ch)).filter(i=>i>=0);
+  if(!dows.length){ alert('曜日が読み取れません'); return; }
+  const mon=_ymNorm($('sh-mon').value||'');
+  document.querySelectorAll('#sh-table tbody tr').forEach(tr=>{
+    const nm=tr.querySelector('td')?.textContent||'';
+    if(name.trim() && !nm.includes(name.trim())) return;
+    tr.querySelectorAll('.cell').forEach(td=>{
+      const d=Number(String(td.dataset.k).split('|')[1]);
+      const dow=new Date(`${mon}-${String(d).padStart(2,'0')}T00:00:00`).getDay();
+      if(!dows.includes(dow)) return;
+      td.dataset.v=c; td.textContent=SHIFT_LABEL[c]||'';
+      td.setAttribute('style', cellStyle(c));
+    });
+  });
+  recalc();
+}
+async function save(){
+  const office=$('sh-off').value||'', mon=_ymNorm($('sh-mon').value||'');
+  if(!office||!mon) return;
+  const cells={};
+  document.querySelectorAll('#sh-table .cell').forEach(td=>{
+    const v=td.dataset.v||''; if(v) cells[td.dataset.k]=v;
+  });
+  const all={...(D.shifts||{})};
+  all[shKey(office,mon)]={office, mon, cells, updatedAt:new Date().toISOString()};
+  D.shifts=all;
+  const ok=await fbSet('shifts', all);
+  render();
+  alert(ok ? `${office} ${mon} のシフトを保存しました` : '端末には保存しましたが、サーバーへの保存に失敗しました。通信を確認してください。');
+}
+function printSheet(){
+  const office=$('sh-off').value||'', mon=_ymNorm($('sh-mon').value||'');
+  const tbl=$('sh-table'); if(!tbl) return;
+  const clone=tbl.cloneNode(true);
+  clone.querySelectorAll('.num').forEach(el=>el.remove());
+  const w=window.open('', '_blank');
+  if(!w){ alert('印刷用の画面を開けませんでした。ポップアップの設定を確認してください。'); return; }
+  w.document.write(`<!doctype html><html><head><meta charset="utf-8"><title>${esc(office)} ${esc(mon)} シフト表</title>
+    <style>body{font-family:sans-serif;padding:10px;}h1{font-size:15px;margin:0 0 8px;}
+    table{border-collapse:collapse;font-size:10px;width:100%;}
+    th,td{border:1px solid #999;padding:2px 3px;text-align:center;}
+    td:first-child,th:first-child{text-align:left;white-space:nowrap;}
+    @page{size:A4 landscape;margin:8mm;}</style></head><body>
+    <h1>${esc(office)}　${esc(mon)}　シフト表</h1>${clone.outerHTML}
+    <script>window.onload=()=>window.print();<\/script></body></html>`);
+  w.document.close();
+}
+window.cycle=cycle; window.weekly=weekly; window.save=save; window.printSheet=printSheet;
+
+$('sh-off').addEventListener('change', render);
+$('sh-mon').addEventListener('change', render);
+document.addEventListener('fb-sdk-ready', initFirebase);
+if(window._fbImports) initFirebase();
+fillOffices();
+</script>
+</body>
+</html>
