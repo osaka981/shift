@@ -93,7 +93,7 @@
 <header>
   <div>
     <h1>大阪急配　シフト表</h1>
-    <div class="ver" id="app-ver">ver 2026-09-24.34</div>
+    <div class="ver" id="app-ver">ver 2026-09-24.35</div>
   </div>
   <div class="row" style="margin-left:auto;">
     <select id="sh-off" class="fi" style="display:none;"></select>
@@ -171,7 +171,7 @@ document.dispatchEvent(new Event('fb-sdk-ready'));
 
 <script>
 'use strict';
-const APP_VER = '2026-09-24.34';
+const APP_VER = '2026-09-24.35';
 console.log('[シフト表] APP_VER', APP_VER);
 
 const FB_CONFIG = {
@@ -201,6 +201,7 @@ const D = {
   customers: lsGet('nikki_customers', []) || [],
   offices: lsGet('nikki_offices', []) || [],
   courses: lsGet('nikki_col_courses', []) || [],
+  drafts: lsGet('nikki_shift_drafts', {}) || {},   // ★ 2026-09-24.35: 下書き（確定前）
   saleEvents: lsGet('nikki_sale_events', []) || [],   // ★ 2026-09-24.3: セールカレンダー
 };
 let fbDB = null;
@@ -238,6 +239,7 @@ async function initFirebase(){
   sub('departments','departments', fillOffices);
   sub('delivery','delivery', render);
   sub('shifts','shifts', render);
+  sub('shift_drafts','drafts', ()=>{ if(_view==='shift') render(); });
   sub('sale_events','saleEvents', render);
   sub('customers','customers', ()=>{ if(_view==='course') renderCourse(); });
   sub('offices','offices', ()=>{ if(_view==='course') renderCourse(); });
@@ -309,6 +311,8 @@ function cellWeight(v, wgt){
 }
 const shKey = (office, mon) => `${office}__${mon}`;
 const shGet = (office, mon) => (D.shifts||{})[shKey(office,mon)] || {cells:{}, updatedAt:null};
+// ★ 2026-09-24.35: 下書き（確定前の内容）
+const draftGet = (office, mon) => (D.drafts||{})[shKey(office,mon)] || null;
 
 function delDeptId(){
   const d=(D.departments||[]).find(x=>x && x.type==='del');
@@ -626,7 +630,8 @@ function render(){
     window._shColW=Math.max(34, Math.floor((avail-NAME_W-OFF_W-AVG_W)/last));
   }
   const data=shGet(office, mon);
-  const work=workCells(office, mon);      // 入力中の内容
+  const draft=draftGet(office, mon);
+  const work={...(draft?draft.cells||{}:{}), ...workCells(office, mon)};   // 下書き＋入力中
   const wgt=weights();
   const colMode=isColOffice(office);   // ★ 2026-09-24.5: 集荷はコース名を入れる
   const colBg=[];
@@ -750,13 +755,15 @@ function render(){
     ${colMode?courseSummaryHTML(office, mon, data):''}
     ${weightsHTML(colMode)}
     <div class="row" style="justify-content:flex-end;margin-top:10px;">
-      <span class="xs muted" style="margin-right:auto;">${data.updatedAt?`最終更新 ${new Date(data.updatedAt).toLocaleString('ja-JP')}`:'未保存'}
+      <span class="xs muted" style="margin-right:auto;">${data.updatedAt?`確定 ${new Date(data.updatedAt).toLocaleString('ja-JP')}`:'未確定'}
+        ${draft?`<span style="color:var(--accent);font-weight:700;margin-left:8px;">下書きあり ${new Date(draft.updatedAt).toLocaleString('ja-JP')}</span>`:''}
         <span id="sh-dirty" style="color:var(--amb);font-weight:700;margin-left:8px;">${_dirty?'未保存の入力があります':''}</span></span>
       ${colMode?'':'<button class="btn gh" onclick="fillAll(\'〇\')">全員すべて〇</button>'}
       <button class="btn gh" onclick="fillAll('')">全員すべて削除</button>
       <button class="btn gh" onclick="weekly()">曜日で一括設定</button>
       <button class="btn gh" onclick="printSheet()">印刷（数量なし）</button>
-      <button class="btn grn" onclick="save()">シフトを保存</button>
+      <button class="btn gh" onclick="saveDraft()">下書き保存</button>
+      <button class="btn grn" onclick="save()">確定して保存</button>
     </div>`;
   refreshForecastInputs();
   // ★ 2026-09-24.8: スマホでは横スクロールの案内を出す
@@ -1126,6 +1133,24 @@ function weekly(){
   });
   recalc();
 }
+// ★ 2026-09-24.35: 下書き保存（画面の内容をそのまま残す。経営管理・日報アプリには出ない）
+async function saveDraft(){
+  const office=$('sh-off').value||'', mon=_ymNorm($('sh-mon').value||'');
+  if(!office||!mon) return;
+  const cells={};
+  document.querySelectorAll('#sh-table .cell').forEach(td=>{
+    const v=td.dataset.v||''; if(v) cells[td.dataset.k]=v;
+  });
+  const all={...(D.drafts||{})};
+  all[shKey(office,mon)]={office, mon, cells, updatedAt:new Date().toISOString()};
+  D.drafts=all;
+  const ok=await fbSet('shift_drafts', all);
+  clearWork(office, mon);
+  clearDirty();
+  render();
+  alert(ok ? '下書きとして保存しました（確定するまで日報アプリには出ません）'
+           : `端末には保存しましたが、サーバーへの保存に失敗しました。\n理由：${_lastFbError||'不明'}`);
+}
 async function save(){
   const office=$('sh-off').value||'', mon=_ymNorm($('sh-mon').value||'');
   if(!office||!mon) return;
@@ -1137,10 +1162,15 @@ async function save(){
   all[shKey(office,mon)]={office, mon, cells, updatedAt:new Date().toISOString()};
   D.shifts=all;
   const ok=await fbSet('shifts', all);
+  // 確定したら下書きは消す
+  if(D.drafts && D.drafts[shKey(office,mon)]){
+    const dr={...D.drafts}; delete dr[shKey(office,mon)];
+    D.drafts=dr; await fbSet('shift_drafts', dr);
+  }
   clearWork(office, mon);
   clearDirty();
   render();
-  alert(ok ? `${office} ${mon} のシフトを保存しました` : '端末には保存しましたが、サーバーへの保存に失敗しました。通信を確認してください。');
+  alert(ok ? `${office} ${mon} のシフトを確定しました（日報アプリにも反映されます）` : '端末には保存しましたが、サーバーへの保存に失敗しました。通信を確認してください。');
 }
 // ══ 第3段階：セールカレンダー ══
 //   CSVの列: 日付, イベント名, 強さ(-3〜3), ずらし日数, 係数(任意), メモ(任意)
@@ -1641,7 +1671,8 @@ window.saveWeights=saveWeights; window.pickOnMap=pickOnMap;
 window.csDragStart=csDragStart; window.csDragOver=csDragOver; window.csDrop=csDrop; window.csDragEnd=csDragEnd;
 window.shRowDragStart=shRowDragStart; window.shRowDragOver=shRowDragOver; window.shRowDrop=shRowDrop; window.shRowDragEnd=shRowDragEnd;
 window.hideStaff=hideStaff; window.showStaff=showStaff; window.toggleShowHidden=toggleShowHidden;
-window.saleBarsHTML=saleBarsHTML; window.showHelp=showHelp; window.setTheme=setTheme; window.cellKey=cellKey; window.fillAll=fillAll; window.fillRow=fillRow;
+window.saleBarsHTML=saleBarsHTML; window.showHelp=showHelp; window.setTheme=setTheme; window.cellKey=cellKey;
+window.saveDraft=saveDraft; window.fillAll=fillAll; window.fillRow=fillRow;
 
 $('sh-off').addEventListener('change', ()=>{ if(confirmLeave()){ _work={}; clearDirty(); render(); } });
 $('sh-mon').addEventListener('change', ()=>{ if(confirmLeave()){ _work={}; clearDirty(); render(); } });
