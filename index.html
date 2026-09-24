@@ -93,7 +93,7 @@
 <header>
   <div>
     <h1>大阪急配　シフト表</h1>
-    <div class="ver" id="app-ver">ver 2026-09-24.44</div>
+    <div class="ver" id="app-ver">ver 2026-09-24.45</div>
   </div>
   <div class="row" style="margin-left:auto;">
     <select id="sh-off" class="fi" style="display:none;"></select>
@@ -184,7 +184,7 @@ document.dispatchEvent(new Event('fb-sdk-ready'));
 
 <script>
 'use strict';
-const APP_VER = '2026-09-24.44';
+const APP_VER = '2026-09-24.45';
 console.log('[シフト表] APP_VER', APP_VER);
 
 const FB_CONFIG = {
@@ -1546,14 +1546,28 @@ function distKm(a, b){
 const ROAD_RATIO = 1.3;   // 直線距離 → 道のりの目安
 function hm2min(v){ const [h,m]=String(v||'0:00').split(':').map(Number); return (h||0)*60+(m||0); }
 function min2hm(v){ v=Math.max(0,Math.round(v)); return `${String(Math.floor(v/60)%24).padStart(2,'0')}:${String(v%60).padStart(2,'0')}`; }
+// ★ 2026-09-24.45: 位置の控え（シフトアプリ側に保存。経営管理が更新されても残る）
+function posOverride(key){ return (D.settings?.pos||{})[key] || null; }
+async function savePosOverride(key, lat, lng, label){
+  const st={...(D.settings||{})};
+  st.pos={...(st.pos||{}), [key]:{lat, lng, label:label||''}};
+  D.settings=st;
+  return await fbSet('shift_settings', st);
+}
 function custPos(id){
   const c=(D.customers||[]).find(x=>String(x.id)===String(id));
   if(!c) return null;
-  return {lat:Number(c.lat)||0, lng:Number(c.lng)||0, name:c.name, addr:(c.puSameAsAddr===false&&c.puAddr)?c.puAddr:(c.addr||'')};
+  const ov=posOverride('cust:'+id);
+  return {lat:Number(ov?ov.lat:c.lat)||0, lng:Number(ov?ov.lng:c.lng)||0, name:c.name,
+    addr:(c.puSameAsAddr===false&&c.puAddr)?c.puAddr:(c.addr||'')};
 }
 // ★ 2026-09-24.41: 立ち寄り先の場所。既定は顧客の集荷先住所。
 //   本社ロジで積む顧客（ASLAJ・福澤など）は「出発地点（本社）」を選べる。地図で個別に指定もできる。
 function stopPos(st, office){
+  if(st.type==='post'){
+    const p=officePos(st.postName);
+    return p ? {...p, name:`${st.postName}（持込）`} : {lat:0,lng:0,name:`${st.postName}（持込・位置なし）`,addr:''};
+  }
   const base=custPos(st.custId);
   const name=base?base.name:'(位置なし)';
   if(st.loc==='origin'){
@@ -1566,7 +1580,9 @@ function stopPos(st, office){
   return base;
 }
 function officePos(name){
+  const ov=posOverride('off:'+name);
   const o=(D.offices||[]).find(x=>x && x.name===name);
+  if(ov) return {lat:Number(ov.lat)||0, lng:Number(ov.lng)||0, name:name, addr:(o&&o.addr)||ov.label||''};
   if(!o) return null;
   return {lat:Number(o.lat)||0, lng:Number(o.lng)||0, name:o.name, addr:o.addr||''};
 }
@@ -1588,7 +1604,7 @@ function calcCourse(c){
     let wait=0;
     if(st.at){ const want=hm2min(st.at); if(want>t){ wait=want-t; t=want; } }
     const arrive=t;
-    const work=Number(st.work)||workDef;
+    const work=Number(st.work) || (st.type==='post' ? postWork : workDef);
     t+=work;
     rows.push({name:p?p.name:'(位置なし)', arrive:min2hm(arrive), leave:min2hm(t),
       move, wait, work, km:d, at:st.at||'', noPos:!p||!p.lat});
@@ -1673,11 +1689,13 @@ function renderCourse(selId){
             style="cursor:grab;">
           <td title="ドラッグで並べ替え">⠿ ${i+1}</td>
           <td style="text-align:left;">${esc(row.name||'')}${row.noPos?'<span class="xs" style="color:#e06666;">（位置未設定）</span>':''}</td>
-          <td><select class="fi" style="width:auto;font-size:11px;padding:3px 4px;" onchange="setStop(${i},'loc',this.value)">
+          <td>${st.type==='post'
+            ? '<span class="xs muted">郵便局</span>'
+            : `<select class="fi" style="width:auto;font-size:11px;padding:3px 4px;" onchange="setStop(${i},'loc',this.value)">
             <option value="cust"${(!st.loc||st.loc==='cust')?' selected':''}>集荷先住所</option>
             <option value="origin"${st.loc==='origin'?' selected':''}>本社ロジ</option>
             <option value="map"${(st.loc&&typeof st.loc==='object')?' selected':''}>地図で指定</option>
-          </select></td>
+          </select>`}</td>
           <td><input type="time" class="fi" style="width:100px;" value="${esc(st.at||'')}"
             oninput="holdStop(${i},'at',this.value)" onblur="commitCourseEdit()" onkeydown="if(event.key==='Enter'){this.blur();}"></td>
           <td class="mono">${esc(row.arrive||'')}</td>
@@ -1690,7 +1708,7 @@ function renderCourse(selId){
           <td>
             <button class="btn gh" style="padding:2px 6px;font-size:10px;" onclick="moveStop(${i},-1)">↑</button>
             <button class="btn gh" style="padding:2px 6px;font-size:10px;" onclick="moveStop(${i},1)">↓</button>
-            <button class="btn gh" style="padding:2px 6px;font-size:10px;" onclick="pickOnMap(${st.custId})" title="地図をクリックして位置を決める">位置</button>
+            <button class="btn gh" style="padding:2px 6px;font-size:10px;" onclick="${st.type==='post'?`pickPostStopOnMap(${i})`:`pickOnMap(${st.custId})`}" title="地図をクリックして位置を決める">位置</button>
             <button class="btn gh" style="padding:2px 6px;font-size:10px;" onclick="delStop(${i})">×</button>
           </td>
         </tr>`;
@@ -1703,7 +1721,9 @@ function renderCourse(selId){
     </table></div>
     <div class="row" style="margin-top:8px;">
       <select id="cs-add" class="fi" style="max-width:280px;">${opts}</select>
-      <button class="btn gh" onclick="addStop()">立ち寄り先を追加</button>
+      <button class="btn gh" onclick="addStop()">顧客を追加</button>
+      <input type="text" id="cs-add-post" class="fi" list="cs-post-list" style="width:170px;" placeholder="郵便局名">
+      <button class="btn gh" onclick="addPostStop()">郵便局を追加</button>
       <button class="btn grn" style="margin-left:auto;" onclick="saveCourses()">コースを保存</button>
     </div>`;
   drawMap(c);
@@ -1773,6 +1793,15 @@ function csDrop(e, to){
   c.stops.splice(to,0,item);
   renderCourse();
 }
+// ★ 2026-09-24.45: 郵便局も立ち寄り先として並べられる（順番の入れ替え・削除も同じ）
+function addPostStop(){
+  const c=curCourse(); if(!c) return;
+  const name=($('cs-add-post')?.value||'').trim();
+  if(!name){ alert('郵便局名を入れてください'); return; }
+  c.stops=[...(c.stops||[]), {type:'post', postName:name, at:'', work:null}];
+  if($('cs-add-post')) $('cs-add-post').value='';
+  renderCourse();
+}
 function moveStop(i, d){
   const c=curCourse(); if(!c) return;
   const j=i+d; if(j<0 || j>=c.stops.length) return;
@@ -1792,6 +1821,11 @@ function pickPostOnMap(){
   const c=curCourse(); if(!c || !c.post){ alert('先に持込先を選んでください'); return; }
   _pickTarget={kind:'office', name:c.post};
   alert(`地図で ${c.post} の位置をクリックしてください。`);
+}
+function pickPostStopOnMap(i){
+  const c=curCourse(); if(!c || !c.stops[i]) return;
+  _pickTarget={kind:'office', name:c.stops[i].postName};
+  alert(`地図で ${c.stops[i].postName} の位置をクリックしてください。`);
 }
 function pickOnMap(custId){
   _pickCustId=custId;
@@ -1880,6 +1914,7 @@ async function useFound(kind){
     const o=(D.offices||[]).find(x=>x && x.name===name);
     if(o){ o.lat=lat; o.lng=lng; if(!o.addr) o.addr=label||''; }
     else (D.offices=D.offices||[]).push({id:Date.now(), name, addr:label||'', lat, lng});
+    await savePosOverride('off:'+name, lat, lng, name);
     const ok=await fbSet('offices', D.offices);
     renderCourse(); showFound(_foundPos);
     alert(ok?`${name} の位置にしました`:'端末には保存しましたが、サーバーへの保存に失敗しました。');
@@ -1901,6 +1936,7 @@ async function _onMapClick(e){
       const o=(D.offices||[]).find(x=>x && x.name===t.name);
       if(o){ o.lat=lat; o.lng=lng; }
       else (D.offices=D.offices||[]).push({id:Date.now(), name:t.name, addr:'', lat, lng});
+      await savePosOverride('off:'+t.name, lat, lng, t.name);
       const ok=await fbSet('offices', D.offices);
       renderCourse();
       alert(ok?`${t.name} の位置を設定しました`:'端末には保存しましたが、サーバーへの保存に失敗しました。');
@@ -1927,6 +1963,7 @@ async function _onMapClick(e){
   if(!cu) return;
   cu.lat=Number(e.latlng.lat.toFixed(6));
   cu.lng=Number(e.latlng.lng.toFixed(6));
+  await savePosOverride('cust:'+cu.id, cu.lat, cu.lng, cu.name);
   const ok=await fbSet('customers', D.customers);
   renderCourse();
   alert(ok?`${cu.name} の位置を設定しました`:'端末には保存しましたが、サーバーへの保存に失敗しました。');
@@ -1992,6 +2029,7 @@ window.setView=setView; window.pickOffice=pickOffice; window.renderCourse=render
 window.newCourse=newCourse; window.delCourse=delCourse; window.saveCourses=saveCourses;
 window.setDepart=setDepart; window.setPost=setPost; window.setStop=setStop;
 window.addStop=addStop; window.moveStop=moveStop; window.delStop=delStop;
+window.addPostStop=addPostStop; window.pickPostStopOnMap=pickPostStopOnMap;
 window.saveWeights=saveWeights; window.pickOnMap=pickOnMap;
 window.csDragStart=csDragStart; window.csDragOver=csDragOver; window.csDrop=csDrop; window.csDragEnd=csDragEnd;
 window.shRowDragStart=shRowDragStart; window.shRowDragOver=shRowDragOver; window.shRowDrop=shRowDrop; window.shRowDragEnd=shRowDragEnd;
