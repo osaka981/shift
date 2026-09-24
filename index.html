@@ -53,7 +53,7 @@
 <header>
   <div>
     <h1>大阪急配　シフト表</h1>
-    <div class="ver" id="app-ver">ver 2026-09-24.2</div>
+    <div class="ver" id="app-ver">ver 2026-09-24.3</div>
   </div>
   <div class="row" style="margin-left:auto;">
     <select id="sh-off" class="fi"></select>
@@ -76,6 +76,10 @@
       <div class="xs muted" id="fc-ly"></div>
       <button class="btn gh" onclick="applyYoy()">昨対から計算</button>
       <button class="btn grn" onclick="saveForecast()">予測を保存</button>
+      <label class="btn gh" style="display:inline-block;">セールCSVを読み込む
+        <input type="file" id="fc-csv" accept=".csv,text/csv" style="display:none;" onchange="importSaleCsv(this)">
+      </label>
+      <button class="btn gh" onclick="checkLastYear()">前年で答え合わせ</button>
       <span class="xs muted" id="fc-note" style="flex-basis:100%;"></span>
     </div>
   </div>
@@ -94,7 +98,7 @@ document.dispatchEvent(new Event('fb-sdk-ready'));
 
 <script>
 'use strict';
-const APP_VER = '2026-09-24.2';
+const APP_VER = '2026-09-24.3';
 console.log('[シフト表] APP_VER', APP_VER);
 
 const FB_CONFIG = {
@@ -120,6 +124,7 @@ const D = {
   departments: lsGet('nikki_departments', []) || [],
   delivery: lsGet('nikki_delivery', []) || [],
   shifts: lsGet('nikki_shifts', {}) || {},
+  saleEvents: lsGet('nikki_sale_events', []) || [],   // ★ 2026-09-24.3: セールカレンダー
 };
 let fbDB = null;
 
@@ -156,6 +161,7 @@ async function initFirebase(){
   sub('departments','departments', fillOffices);
   sub('delivery','delivery', render);
   sub('shifts','shifts', render);
+  sub('sale_events','saleEvents', render);
   setState('接続済み', true);
 }
 async function fbSet(node, value){
@@ -249,14 +255,16 @@ function lastYearTotal(office, mon){
   return Object.values(map).reduce((a,b)=>a+b,0);
 }
 // 月合計を曜日係数で31日に割り振る
-function spreadByDow(total, mon, fac){
+function spreadByDow(total, mon, fac, saleMap){
   const [y,m]=mon.split('-').map(Number);
   const last=new Date(y,m,0).getDate();
   const raw=[];
   let sum=0;
   for(let d=1; d<=last; d++){
-    const dow=new Date(`${mon}-${String(d).padStart(2,'0')}T00:00:00`).getDay();
-    const v=fac[dow]||0;
+    const key=`${mon}-${String(d).padStart(2,'0')}`;
+    const dow=new Date(key+'T00:00:00').getDay();
+    // ★ 2026-09-24.3: 曜日係数 × セール係数。最後に月合計へ正規化する
+    const v=(fac[dow]||0) * ((saleMap && saleMap[key]) ? saleMap[key].factor : 1);
     raw.push(v); sum+=v;
   }
   if(!sum) return raw.map(()=>0);
@@ -312,7 +320,8 @@ function render(){
   const fc=data.forecast||{};
   const dw=dowFactors(office, mon);
   const total=Number(fc.total)||0;
-  const plan=total?spreadByDow(total, mon, dw.f):[];
+  const saleMap=_saleFactorMap(mon);
+  const plan=total?spreadByDow(total, mon, dw.f, saleMap):[];
   let foot='<tr><td>人数</td>';
   for(let d=1; d<=last; d++){
     let n=0;
@@ -335,10 +344,31 @@ function render(){
       r2+=`<td class="num">${cap||''}</td>`;
       r3+=`<td class="num" style="${need?col:''}">${need?(diff>0?'+':'')+diff:''}</td>`;
     }
+    let r0='<tr><td class="num">セール</td>';
+    for(let d=1; d<=last; d++){
+      const key=`${mon}-${String(d).padStart(2,'0')}`;
+      const sm=saleMap[key];
+      r0+=`<td class="num" title="${sm?esc(sm.names.join('・')):''}" style="${sm?'color:#e08b1f;font-weight:700;':''}">${sm?Math.round(sm.factor*100)+'%':''}</td>`;
+    }
+    r0+='<td></td><td class="num"></td></tr>';
+    foot+=r0;
     const sumPlan=plan.reduce((a,b)=>a+b,0);
     r1+=`<td></td><td class="num">${sumPlan}</td></tr>`;
     r2+='<td></td><td class="num"></td></tr>'; r3+='<td></td><td class="num"></td></tr>';
     foot+=r1+r2+r3;
+  } else {
+    // 予測が未入力でも、セールの予定だけは見えるようにする
+    const smKeys=Object.keys(saleMap);
+    if(smKeys.length){
+      let r0='<tr><td class="num">セール</td>';
+      for(let d=1; d<=last; d++){
+        const key=`${mon}-${String(d).padStart(2,'0')}`;
+        const sm=saleMap[key];
+        r0+=`<td class="num" title="${sm?esc(sm.names.join('・')):''}" style="${sm?'color:#e08b1f;font-weight:700;':''}">${sm?Math.round(sm.factor*100)+'%':''}</td>`;
+      }
+      r0+='<td></td><td class="num"></td></tr>';
+      foot+=r0;
+    }
   }
   root.innerHTML=`
     ${total?`<div class="xs muted" style="margin-bottom:6px;">予測は月合計 ${total.toLocaleString()}個を曜日係数で配分しています${dw.hasData?'（直近6か月の実績から算出）':'（実績が足りないため全曜日を同じ比率にしています）'}。赤字は人手不足、青字は余力です。</div>`:''}
@@ -423,6 +453,95 @@ async function save(){
   render();
   alert(ok ? `${office} ${mon} のシフトを保存しました` : '端末には保存しましたが、サーバーへの保存に失敗しました。通信を確認してください。');
 }
+// ══ 第3段階：セールカレンダー ══
+//   CSVの列: 日付, イベント名, 強さ(-3〜3), ずらし日数, 係数(任意), メモ(任意)
+//   固定のルールは持たず、係数はいつでも手で上書きできる。
+function _saleFactorMap(mon){
+  const map={};
+  (D.saleEvents||[]).forEach(e=>{
+    if(!e || !e.date) return;
+    const base=new Date(String(e.date).replace(/\//g,'-')+'T00:00:00');
+    if(isNaN(base)) return;
+    const shiftDays=Number(e.shiftDays)||0;
+    const d=new Date(base.getFullYear(), base.getMonth(), base.getDate()+shiftDays);
+    const key=`${d.getFullYear()}-${String(d.getMonth()+1).padStart(2,'0')}-${String(d.getDate()).padStart(2,'0')}`;
+    if(!key.startsWith(mon)) return;
+    const f = (e.factor!=null && e.factor!=='') ? Number(e.factor) : (1 + (Number(e.power)||0)*0.1);
+    if(!map[key]) map[key]={factor:1, names:[]};
+    map[key].factor *= (isFinite(f)&&f>0 ? f : 1);
+    map[key].names.push(e.name||'セール');
+  });
+  return map;
+}
+function importSaleCsv(input){
+  const file=input.files && input.files[0];
+  if(!file) return;
+  const rd=new FileReader();
+  rd.onload=async ()=>{
+    try{
+      const txt=String(rd.result||'').replace(/^\uFEFF/,'');
+      const lines=txt.split(/\r?\n/).filter(l=>l.trim());
+      if(!lines.length){ alert('CSVが空です'); return; }
+      const head=lines[0].split(',').map(x=>x.trim());
+      const idx=name=>head.findIndex(h=>h.replace(/\s/g,'').includes(name));
+      const iDate=idx('日付')>=0?idx('日付'):0;
+      const iName=idx('イベント')>=0?idx('イベント'):(idx('名')>=0?idx('名'):1);
+      const iPow=idx('強')  , iShift=idx('ずら')>=0?idx('ずら'):idx('日数'), iFac=idx('係数'), iMemo=idx('メモ');
+      const hasHeader = /日付|date/i.test(head[iDate]||'');
+      const rows=(hasHeader?lines.slice(1):lines).map(l=>{
+        const c=l.split(',').map(x=>x.trim());
+        const date=String(c[iDate]||'').replace(/\//g,'-');
+        if(!/^\d{4}-\d{1,2}-\d{1,2}$/.test(date)) return null;
+        const [y,m,d]=date.split('-').map(Number);
+        return {
+          date:`${y}-${String(m).padStart(2,'0')}-${String(d).padStart(2,'0')}`,
+          name: c[iName]||'セール',
+          power: iPow>=0 ? Number(c[iPow])||0 : 0,
+          shiftDays: iShift>=0 ? Number(c[iShift])||0 : 0,
+          factor: iFac>=0 && c[iFac]!=='' ? Number(c[iFac]) : null,
+          memo: iMemo>=0 ? (c[iMemo]||'') : '',
+        };
+      }).filter(Boolean);
+      if(!rows.length){ alert('読み取れる行がありませんでした。1列目に日付（2026-10-05 など）を入れてください。'); return; }
+      const keep=(D.saleEvents||[]).filter(e=>!rows.some(r=>r.date===e.date && r.name===e.name));
+      D.saleEvents=[...keep, ...rows].sort((a,b)=>a.date.localeCompare(b.date));
+      const ok=await fbSet('sale_events', D.saleEvents);
+      render();
+      alert(`${rows.length}件を読み込みました${ok?'':'（サーバーへの保存に失敗しました）'}`);
+    }catch(e){ console.error(e); alert('CSVの読み込みに失敗しました'); }
+    input.value='';
+  };
+  rd.readAsText(file, 'utf-8');
+}
+// 前年の同じ日付で、平常日と比べて何%だったかを出す
+function checkLastYear(){
+  const office=$('sh-off').value||'', mon=_ymNorm($('sh-mon').value||'');
+  const evs=(D.saleEvents||[]).filter(e=>{
+    const base=new Date(String(e.date).replace(/\//g,'-')+'T00:00:00');
+    if(isNaN(base)) return false;
+    const d=new Date(base.getFullYear(), base.getMonth(), base.getDate()+(Number(e.shiftDays)||0));
+    return `${d.getFullYear()}-${String(d.getMonth()+1).padStart(2,'0')}`===mon;
+  });
+  if(!evs.length){ alert('この月に当たるセールの予定がありません。CSVを読み込んでください。'); return; }
+  const [y,m]=mon.split('-').map(Number);
+  const ly=`${y-1}-${String(m).padStart(2,'0')}`;
+  const nextM = m===12 ? `${y}-01` : `${y-1}-${String(m+1).padStart(2,'0')}`;
+  const map=dailyTotals(office, ly, nextM);
+  const vals=Object.values(map).filter(v=>v>0);
+  if(!vals.length){ alert('前年同月の実績がないため、答え合わせができません。'); return; }
+  const mean=vals.reduce((a,b)=>a+b,0)/vals.length;
+  const lines=evs.map(e=>{
+    const base=new Date(String(e.date).replace(/\//g,'-')+'T00:00:00');
+    const d=new Date(base.getFullYear(), base.getMonth(), base.getDate()+(Number(e.shiftDays)||0));
+    const lyd=`${d.getFullYear()-1}-${String(d.getMonth()+1).padStart(2,'0')}-${String(d.getDate()).padStart(2,'0')}`;
+    const v=map[lyd]||0;
+    const pct=v?Math.round(v/mean*100):null;
+    const fac=(e.factor!=null&&e.factor!=='')?Number(e.factor):(1+(Number(e.power)||0)*0.1);
+    return `${lyd}　${e.name}　前年 ${v?v.toLocaleString()+'個（平常比 '+pct+'%）':'実績なし'}　いまの係数 ${Math.round(fac*100)}%`;
+  });
+  alert(`前年同月の平常平均 ${Math.round(mean).toLocaleString()}個／日\n\n`+lines.join('\n')
+    + '\n\n係数がずれている場合は、CSVの「係数」列か「強さ」列を直して読み込み直してください。');
+}
 function refreshForecastInputs(){
   const office=$('sh-off').value||'', mon=_ymNorm($('sh-mon').value||'');
   if(!office||!mon) return;
@@ -473,6 +592,7 @@ function printSheet(){
 }
 window.cycle=cycle; window.weekly=weekly; window.save=save; window.printSheet=printSheet;
 window.applyYoy=applyYoy; window.saveForecast=saveForecast;
+window.importSaleCsv=importSaleCsv; window.checkLastYear=checkLastYear;
 
 $('sh-off').addEventListener('change', render);
 $('sh-mon').addEventListener('change', render);
