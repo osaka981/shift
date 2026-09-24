@@ -38,7 +38,7 @@
   .xs{font-size:11.5px;}
   .tw{overflow:auto;max-height:64vh;border:1px solid var(--brd);border-radius:6px;}
   table{border-collapse:collapse;font-size:12.5px;width:100%;}
-  th,td{border:1px solid var(--brd);padding:3px 4px;text-align:center;white-space:nowrap;}
+  th,td{border:1px solid var(--brd);padding:5px 4px;text-align:center;white-space:nowrap;}
   thead th{position:sticky;top:0;background:var(--bg3);z-index:2;}
   tbody td:first-child,thead th:first-child{position:sticky;left:0;background:var(--bg2);text-align:left;z-index:1;}
   tfoot td{background:var(--bg3);font-weight:700;}
@@ -83,7 +83,7 @@
 <header>
   <div>
     <h1>大阪急配　シフト表</h1>
-    <div class="ver" id="app-ver">ver 2026-09-24.23</div>
+    <div class="ver" id="app-ver">ver 2026-09-24.24</div>
   </div>
   <div class="row" style="margin-left:auto;">
     <select id="sh-off" class="fi" style="display:none;"></select>
@@ -155,7 +155,7 @@ document.dispatchEvent(new Event('fb-sdk-ready'));
 
 <script>
 'use strict';
-const APP_VER = '2026-09-24.23';
+const APP_VER = '2026-09-24.24';
 console.log('[シフト表] APP_VER', APP_VER);
 
 const FB_CONFIG = {
@@ -566,7 +566,7 @@ function laneRowsHTML(mon, last){
           d+=span;
         } else { tds+=empty; d++; }
       }
-      html+=`<tr><th style="text-align:left;font-size:10px;color:${col};border-color:transparent;">${ri===0?esc(media):''}</th>${tds}
+      html+=`<tr><th style="text-align:left;font-size:11px;color:${col};border-color:transparent;">${ri===0?esc(media):''}</th>${tds}
         <th style="border-color:transparent;background:transparent;"></th><th class="num" style="border-color:transparent;background:transparent;"></th></tr>`;
     });
   });
@@ -583,9 +583,11 @@ function render(){
   const last=new Date(y,m,0).getDate();
   const W='日月火水木金土';
   // ★ 2026-09-24.22: 列幅を先に決める（帯の文字数もこの幅に合わせる）
+  // ★ 2026-09-24.24: 氏名欄を広げ（ボタンが切れないように）、日付の列も広めにする
+  const NAME_W=200, OFF_W=44, AVG_W=72;
   {
     const avail=(document.querySelector('.wrap')?.clientWidth||window.innerWidth)-40;
-    window._shColW=Math.max(30, Math.floor((avail-120-40-64)/last));
+    window._shColW=Math.max(34, Math.floor((avail-NAME_W-OFF_W-AVG_W)/last));
   }
   const data=shGet(office, mon);
   const wgt=weights();
@@ -597,7 +599,7 @@ function render(){
     const hol=holidayName(iso);
     colBg[d] = (dow===0||hol) ? 'background:rgba(224,102,102,.10);' : dow===6 ? 'background:rgba(111,168,220,.10);' : '';
   }
-  let head=laneRowsHTML(mon, last)+'<tr><th style="min-width:110px;">氏名</th>';
+  let head=laneRowsHTML(mon, last)+'<tr><th>氏名</th>';
   for(let d=1; d<=last; d++){
     const iso=`${mon}-${String(d).padStart(2,'0')}`;
     const dow=new Date(iso+'T00:00:00').getDay();
@@ -676,11 +678,11 @@ function render(){
     ${total?`<div class="xs muted" style="margin-bottom:6px;">予測は月合計 ${total.toLocaleString()}個を曜日係数で配分しています${dw.hasData?'（直近6か月の実績から算出）':'（実績が足りないため全曜日を同じ比率にしています）'}。赤字は人手不足、青字は余力です。</div>`:''}
     ${colMode?'<div class="xs muted" style="margin-bottom:6px;">ますをタップすると、その日に回るコースを選べます。コースは「集荷コース」で作ります。</div>':''}
     <div class="xs muted" id="sh-scroll-hint" style="margin-bottom:4px;display:none;">表は横にスクロールできます。氏名の列は固定されます。</div>
-    <div class="tw"><table id="sh-table" style="table-layout:fixed;width:${120+40+64+last*window._shColW}px;">
+    <div class="tw"><table id="sh-table" style="table-layout:fixed;width:${NAME_W+OFF_W+AVG_W+last*window._shColW}px;font-size:13px;">
       <colgroup>
-        <col style="width:120px;">
+        <col style="width:${NAME_W}px;">
         ${Array.from({length:last},()=>`<col style="width:${window._shColW}px;">`).join('')}
-        <col style="width:40px;"><col style="width:64px;">
+        <col style="width:${OFF_W}px;"><col style="width:${AVG_W}px;">
       </colgroup>
       <thead>${head}</thead><tbody>${body}</tbody><tfoot>${foot}</tfoot></table></div>
     ${holidayNoteHTML(mon, last)}
