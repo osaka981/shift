@@ -47,6 +47,32 @@
   .al-w{background:rgba(224,139,31,.12);border:1px solid rgba(224,139,31,.4);}
   .al-e{background:rgba(217,83,79,.12);border:1px solid rgba(217,83,79,.4);}
   .mono{font-family:var(--mono);}
+  /* ★ 2026-09-24.8: スマホ表示 */
+  @media (max-width: 720px){
+    header{padding:8px 10px;gap:6px;position:static;}
+    h1{font-size:13px;}
+    .wrap{padding:8px 8px 60px;}
+    .card{padding:8px;margin-bottom:8px;}
+    .btn{padding:8px 10px;font-size:12px;}
+    .fi{font-size:12px;padding:7px 8px;}
+    #off-tabs, #view-tabs{overflow-x:auto;flex-wrap:nowrap;-webkit-overflow-scrolling:touch;padding-bottom:2px;}
+    #off-tabs .btn, #view-tabs .btn{white-space:nowrap;flex:0 0 auto;}
+    .tw{max-height:70vh;}
+    table{font-size:10.5px;}
+    th,td{padding:2px 3px;}
+    thead th{font-size:9.5px;}
+    /* 1列目（氏名・項目）を固定したまま、横スクロールで日付を送る */
+    tbody td:first-child,thead th:first-child,tfoot td:first-child{min-width:86px;max-width:110px;white-space:normal;}
+    .cell{min-width:26px;}
+    #cs-map{height:300px;}
+    /* 予測の入力欄は縦に積む */
+    #fc-card .row{gap:6px;}
+    #fc-card .row > div{flex:1 1 46%;}
+  }
+  @media (max-width: 420px){
+    table{font-size:10px;}
+    .cell{min-width:24px;}
+  }
 </style>
 <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css">
 <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
@@ -55,7 +81,7 @@
 <header>
   <div>
     <h1>大阪急配　シフト表</h1>
-    <div class="ver" id="app-ver">ver 2026-09-24.7</div>
+    <div class="ver" id="app-ver">ver 2026-09-24.8</div>
   </div>
   <div class="row" style="margin-left:auto;">
     <select id="sh-off" class="fi" style="display:none;"></select>
@@ -125,7 +151,7 @@ document.dispatchEvent(new Event('fb-sdk-ready'));
 
 <script>
 'use strict';
-const APP_VER = '2026-09-24.7';
+const APP_VER = '2026-09-24.8';
 console.log('[シフト表] APP_VER', APP_VER);
 
 const FB_CONFIG = {
@@ -462,6 +488,7 @@ function render(){
         : 'ますをタップすると 〇 → × → ① → ② → ③ → 〜① → 〜② → 〜③ → 空 の順に変わります。<br>'}
       〇=終日／×=休／①②③=その便のみ／〜①〜②〜③=その便まで。人数は重み（終日1・〜②0.5・①0.3・②③0.2）で数えています。
     </div>
+    <div class="xs muted" id="sh-scroll-hint" style="margin-bottom:4px;display:none;">表は横にスクロールできます。氏名の列は固定されます。</div>
     <div class="tw"><table id="sh-table"><thead>${head}</thead><tbody>${body}</tbody><tfoot>${foot}</tfoot></table></div>
     ${colMode?courseSummaryHTML(office, mon, data):''}
     ${weightsHTML(colMode)}
@@ -472,6 +499,9 @@ function render(){
       <button class="btn grn" onclick="save()">シフトを保存</button>
     </div>`;
   refreshForecastInputs();
+  // ★ 2026-09-24.8: スマホでは横スクロールの案内を出す
+  const hint=$('sh-scroll-hint');
+  if(hint) hint.style.display = (window.innerWidth<=720) ? 'block' : 'none';
 }
 // ★ 2026-09-24.6: コースの所要時間の一覧（出勤時間の振り分け用）
 function courseSummaryHTML(office, mon, data){
