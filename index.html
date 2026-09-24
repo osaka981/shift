@@ -81,7 +81,7 @@
 <header>
   <div>
     <h1>大阪急配　シフト表</h1>
-    <div class="ver" id="app-ver">ver 2026-09-24.16</div>
+    <div class="ver" id="app-ver">ver 2026-09-24.17</div>
   </div>
   <div class="row" style="margin-left:auto;">
     <select id="sh-off" class="fi" style="display:none;"></select>
@@ -151,7 +151,7 @@ document.dispatchEvent(new Event('fb-sdk-ready'));
 
 <script>
 'use strict';
-const APP_VER = '2026-09-24.16';
+const APP_VER = '2026-09-24.17';
 console.log('[シフト表] APP_VER', APP_VER);
 
 const FB_CONFIG = {
@@ -469,6 +469,9 @@ function fillOffices(){
   render();
 }
 // ★ 2026-09-24.15: 媒体ごとの色
+// ★ 2026-09-24.17: 大型セールは色を強くする
+const BIG_SALE_WORDS=['スーパーセール','感謝祭','ブラックフライデー','メガ割','大感謝','超PayPay','年末年始','クリスマス','お年玉'];
+function isBigSale(name){ return BIG_SALE_WORDS.some(w=>String(name||'').includes(w)); }
 const MEDIA_COLORS=['#c0392b','#2e7d32','#e67e22','#8e44ad','#2980b9','#c2185b','#00838f','#6d4c41'];
 function mediaColor(name){
   let h=0; for(const ch of String(name||'')) h=(h*31+ch.charCodeAt(0))%997;
@@ -518,10 +521,12 @@ function laneRowsHTML(mon, last){
         const ev=row.find(x=>x.from===d);
         if(ev){
           const span=Math.min(ev.to, last)-d+1;
+          const big=isBigSale(ev.name);
           tds+=`<th colspan="${span}" title="${esc(media)} ${esc(ev.name)}"
             style="padding:1px 2px;border-color:transparent;background:transparent;">
-            <div style="background:${col};color:#fff;font-size:9.5px;font-weight:700;white-space:nowrap;overflow:hidden;
-              border-radius:9px;padding:1px 6px;line-height:1.4;">${esc(ev.name)}</div></th>`;
+            <div style="background:${big?'#d9534f':col};color:#fff;font-size:9.5px;font-weight:${big?'800':'700'};
+              white-space:nowrap;overflow:hidden;border-radius:9px;padding:1px 6px;line-height:1.4;
+              ${big?'box-shadow:0 0 0 1px rgba(255,255,255,.35) inset;':''}">${esc(media)}${big?'★':''}</div></th>`;
           d+=span;
         } else { tds+=empty; d++; }
       }
@@ -736,26 +741,70 @@ function dayStripHTML(mon, saleMap){
 
 // ★ 2026-09-24.9: その月のセール予定の一覧（媒体名・セール名が分かるように）
 function saleListHTML(mon, saleMap){
-  const keys=Object.keys(saleMap||{}).sort();
-  if(!keys.length) return '';
-  const rows=keys.map(k=>{
-    const sm=saleMap[k];
-    const d=Number(k.slice(8,10));
-    const dow='日月火水木金土'[new Date(k+'T00:00:00').getDay()];
-    return sm.items.map((it,i)=>`<tr>
-      <td class="mono">${i===0?`${d}日(${dow})`:''}</td>
-      <td style="text-align:left;">${esc(it.src.media||'')}</td>
-      <td style="text-align:left;">${esc(it.src.name||'')}</td>
-      <td class="mono">${Math.round(it.factor*100)}%</td>
-      <td class="mono xs">${it.src.shiftDays?`購買日から${it.src.shiftDays}日後`:'当日'}</td>
-      <td class="xs" style="text-align:left;">${esc(it.src.memo||'')}</td>
-    </tr>`).join('');
+  // ★ 2026-09-24.17: 月間カレンダー（月曜始まり・連続する期間は1本の帯・帯の中に名称）
+  const [y,m]=mon.split('-').map(Number);
+  const last=new Date(y,m,0).getDate();
+  const lanes=saleLanes(mon);
+  // 期間を平らな一覧にする
+  const evs=[];
+  Object.entries(lanes).forEach(([media, rows])=>{
+    rows.forEach(row=>row.forEach(ev=>evs.push({media, name:ev.name, from:ev.from, to:ev.to})));
+  });
+  if(!evs.length) return '';
+  const first=new Date(y, m-1, 1);
+  const startPad=(first.getDay()+6)%7;           // 月曜始まり
+  const weeks=[];
+  for(let d=1-startPad; d<=last; d+=7) weeks.push(d);
+  const W=['月','火','水','木','金','土','日'];
+  const head=`<tr>${W.map((w,i)=>`<th style="${i===5?'color:#6fa8dc;':i===6?'color:#e06666;':''}width:14.2%;">${w}</th>`).join('')}</tr>`;
+  const body=weeks.map(ws=>{
+    // 日付の行
+    let dayRow='<tr>';
+    for(let i=0;i<7;i++){
+      const d=ws+i;
+      if(d<1||d>last){ dayRow+='<td style="background:transparent;border-color:transparent;"></td>'; continue; }
+      const iso=`${mon}-${String(d).padStart(2,'0')}`;
+      const hol=holidayName(iso);
+      const dow=new Date(iso+'T00:00:00').getDay();
+      const col=(dow===0||hol)?'color:#e06666;':dow===6?'color:#6fa8dc;':'';
+      dayRow+=`<td style="${col}text-align:left;font-weight:700;${hol?'background:rgba(224,102,102,.10);':''}">${d}${hol?`<span class="xs"> ${esc(hol)}</span>`:''}</td>`;
+    }
+    dayRow+='</tr>';
+    // その週に掛かる期間を段に積む
+    const wk=evs.filter(e=>e.to>=ws && e.from<=ws+6)
+      .map(e=>({...e, s:Math.max(e.from, ws), t:Math.min(e.to, ws+6)}))
+      .sort((a,b)=>a.s-b.s || (b.t-b.s)-(a.t-a.s));
+    const rows=[];
+    wk.forEach(e=>{
+      let row=rows.find(r=>r.every(x=>e.s>x.t || e.t<x.s));
+      if(!row){ row=[]; rows.push(row); }
+      row.push(e);
+    });
+    const barRows=rows.map(row=>{
+      let tr='<tr>', i=0;
+      while(i<7){
+        const d=ws+i;
+        const ev=row.find(x=>x.s===d);
+        if(ev){
+          const span=ev.t-ev.s+1;
+          const big=isBigSale(ev.name);
+          const col=big?'#d9534f':mediaColor(ev.media);
+          const cont = ev.from<ev.s ? '〜' : '';
+          tr+=`<td colspan="${span}" style="padding:1px 2px;border-color:transparent;background:transparent;">
+            <div title="${esc(ev.media)} ${esc(ev.name)}" style="background:${col};color:#fff;border-radius:9px;
+              font-size:10px;font-weight:${big?'800':'700'};padding:1px 8px;white-space:nowrap;overflow:hidden;">
+              ${cont}${esc(ev.media)} ${esc(ev.name)}</div></td>`;
+          i+=span;
+        } else { tr+='<td style="border-color:transparent;background:transparent;"></td>'; i++; }
+      }
+      return tr+'</tr>';
+    }).join('');
+    return dayRow+barRows;
   }).join('');
   return `<div style="margin-top:12px;">
-    <div class="xs fw7" style="margin-bottom:4px;">この月のセール予定</div>
-    <div class="tw" style="max-height:none;"><table>
-      <thead><tr><th>日</th><th>媒体</th><th>セール名</th><th>係数</th><th>反映</th><th>メモ</th></tr></thead>
-      <tbody>${rows}</tbody></table></div>
+    <div class="xs fw7" style="margin-bottom:4px;">この月のセール予定（★は大型セール）</div>
+    <div class="tw" style="max-height:none;"><table style="table-layout:fixed;">
+      <thead>${head}</thead><tbody>${body}</tbody></table></div>
   </div>`;
 }
 
