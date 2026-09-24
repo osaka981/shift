@@ -81,7 +81,7 @@
 <header>
   <div>
     <h1>大阪急配　シフト表</h1>
-    <div class="ver" id="app-ver">ver 2026-09-24.9</div>
+    <div class="ver" id="app-ver">ver 2026-09-24.10</div>
   </div>
   <div class="row" style="margin-left:auto;">
     <select id="sh-off" class="fi" style="display:none;"></select>
@@ -151,7 +151,7 @@ document.dispatchEvent(new Event('fb-sdk-ready'));
 
 <script>
 'use strict';
-const APP_VER = '2026-09-24.9';
+const APP_VER = '2026-09-24.10';
 console.log('[シフト表] APP_VER', APP_VER);
 
 const FB_CONFIG = {
@@ -239,6 +239,30 @@ async function fbSet(node, value){
 }
 
 // ══ シフト表 ══
+// ★ 2026-09-24.10: 祝日（日報アプリと同じ表）
+const HOLIDAYS_JP = {
+  '2025-01-01':'元日','2025-01-13':'成人の日','2025-02-11':'建国記念の日',
+  '2025-02-23':'天皇誕生日','2025-02-24':'振替休日','2025-03-20':'春分の日',
+  '2025-04-29':'昭和の日','2025-05-03':'憲法記念日','2025-05-04':'みどりの日',
+  '2025-05-05':'こどもの日','2025-05-06':'振替休日','2025-07-21':'海の日',
+  '2025-08-11':'山の日','2025-09-15':'敬老の日','2025-09-23':'秋分の日',
+  '2025-10-13':'スポーツの日','2025-11-03':'文化の日','2025-11-23':'勤労感謝の日',
+  '2025-11-24':'振替休日','2026-01-01':'元日','2026-01-12':'成人の日',
+  '2026-02-11':'建国記念の日','2026-02-23':'天皇誕生日','2026-03-20':'春分の日',
+  '2026-04-29':'昭和の日','2026-05-03':'憲法記念日','2026-05-04':'みどりの日',
+  '2026-05-05':'こどもの日','2026-05-06':'振替休日','2026-07-20':'海の日',
+  '2026-08-11':'山の日','2026-09-21':'敬老の日','2026-09-22':'国民の休日',
+  '2026-09-23':'秋分の日','2026-10-12':'スポーツの日','2026-11-03':'文化の日',
+  '2026-11-23':'勤労感謝の日',
+  '2027-01-01':'元日','2027-01-11':'成人の日','2027-02-11':'建国記念の日',
+  '2027-02-23':'天皇誕生日','2027-03-21':'春分の日','2027-03-22':'振替休日',
+  '2027-04-29':'昭和の日','2027-05-03':'憲法記念日','2027-05-04':'みどりの日',
+  '2027-05-05':'こどもの日','2027-07-19':'海の日','2027-08-11':'山の日',
+  '2027-09-20':'敬老の日','2027-09-23':'秋分の日','2027-10-11':'スポーツの日',
+  '2027-11-03':'文化の日','2027-11-23':'勤労感謝の日',
+};
+function holidayName(iso){ return HOLIDAYS_JP[iso]||''; }
+
 const SHIFT_CODES = ['', '〇', '×', '1', '2', '3', '~1', '~2', '~3'];
 const SHIFT_LABEL = {'':'', '〇':'〇', '×':'×', '1':'①', '2':'②', '3':'③', '~1':'〜①', '~2':'〜②', '~3':'〜③'};
 // ★ 2026-09-24.7: 終日1として各便0.3ずつ。〜③は終日と同じ1
@@ -404,9 +428,11 @@ function render(){
   const colMode=isColOffice(office);   // ★ 2026-09-24.5: 集荷はコース名を入れる
   let head='<tr><th style="min-width:110px;">氏名</th>';
   for(let d=1; d<=last; d++){
-    const dow=new Date(`${mon}-${String(d).padStart(2,'0')}T00:00:00`).getDay();
-    const col=dow===0?'color:#e06666;':dow===6?'color:#6fa8dc;':'';
-    head+=`<th style="${col}min-width:26px;">${d}<div class="xs" style="${col}">${W[dow]}</div></th>`;
+    const iso=`${mon}-${String(d).padStart(2,'0')}`;
+    const dow=new Date(iso+'T00:00:00').getDay();
+    const hol=holidayName(iso);
+    const col=(dow===0||hol)?'color:#e06666;':dow===6?'color:#6fa8dc;':'';
+    head+=`<th title="${esc(hol)}" style="${col}min-width:26px;">${d}<div class="xs" style="${col}">${W[dow]}</div></th>`;
   }
   head+='<th>休</th><th class="num">平均持出</th></tr>';
   let body='';
@@ -454,31 +480,10 @@ function render(){
       r2+=`<td class="num">${cap||''}</td>`;
       r3+=`<td class="num" style="${need?col:''}">${need?(diff>0?'+':'')+diff:''}</td>`;
     }
-    let r0='<tr><td class="num">セール</td>';
-    for(let d=1; d<=last; d++){
-      const key=`${mon}-${String(d).padStart(2,'0')}`;
-      const sm=saleMap[key];
-      r0+=`<td class="num" title="${sm?esc(sm.names.join('・')):''}" style="${sm?'color:#e08b1f;font-weight:700;':''}">${sm?Math.round(sm.factor*100)+'%'+`<div class="xs" style="font-weight:400;">${esc(sm.names.map(n=>n.slice(0,6)).join('/'))}</div>`:''}</td>`;
-    }
-    r0+='<td></td><td class="num"></td></tr>';
-    foot+=r0;
     const sumPlan=plan.reduce((a,b)=>a+b,0);
     r1+=`<td></td><td class="num">${sumPlan}</td></tr>`;
     r2+='<td></td><td class="num"></td></tr>'; r3+='<td></td><td class="num"></td></tr>';
     foot+=r1+r2+r3;
-  } else {
-    // 予測が未入力でも、セールの予定だけは見えるようにする
-    const smKeys=Object.keys(saleMap);
-    if(smKeys.length){
-      let r0='<tr><td class="num">セール</td>';
-      for(let d=1; d<=last; d++){
-        const key=`${mon}-${String(d).padStart(2,'0')}`;
-        const sm=saleMap[key];
-        r0+=`<td class="num" title="${sm?esc(sm.names.join('・')):''}" style="${sm?'color:#e08b1f;font-weight:700;':''}">${sm?Math.round(sm.factor*100)+'%'+`<div class="xs" style="font-weight:400;">${esc(sm.names.map(n=>n.slice(0,6)).join('/'))}</div>`:''}</td>`;
-      }
-      r0+='<td></td><td class="num"></td></tr>';
-      foot+=r0;
-    }
   }
   root.innerHTML=`
     ${total?`<div class="xs muted" style="margin-bottom:6px;">予測は月合計 ${total.toLocaleString()}個を曜日係数で配分しています${dw.hasData?'（直近6か月の実績から算出）':'（実績が足りないため全曜日を同じ比率にしています）'}。赤字は人手不足、青字は余力です。</div>`:''}
@@ -490,6 +495,7 @@ function render(){
     </div>
     <div class="xs muted" id="sh-scroll-hint" style="margin-bottom:4px;display:none;">表は横にスクロールできます。氏名の列は固定されます。</div>
     <div class="tw"><table id="sh-table"><thead>${head}</thead><tbody>${body}</tbody><tfoot>${foot}</tfoot></table></div>
+    ${dayStripHTML(mon, saleMap)}
     ${saleListHTML(mon, saleMap)}
     ${colMode?courseSummaryHTML(office, mon, data):''}
     ${weightsHTML(colMode)}
@@ -504,6 +510,34 @@ function render(){
   const hint=$('sh-scroll-hint');
   if(hint) hint.style.display = (window.innerWidth<=720) ? 'block' : 'none';
 }
+// ★ 2026-09-24.10: 日付ごとの帯（祝日・セール）。シフト表の外に出して、ますの高さを変えない
+function dayStripHTML(mon, saleMap){
+  const [y,m]=mon.split('-').map(Number);
+  const last=new Date(y,m,0).getDate();
+  const W='日月火水木金土';
+  let h1='<tr><th style="min-width:86px;">日付</th>', h2='<tr><td>祝日</td>', h3='<tr><td>セール</td>';
+  let hasHol=false, hasSale=false;
+  for(let d=1; d<=last; d++){
+    const iso=`${mon}-${String(d).padStart(2,'0')}`;
+    const dow=new Date(iso+'T00:00:00').getDay();
+    const hol=holidayName(iso);
+    const sm=saleMap[iso];
+    if(hol) hasHol=true;
+    if(sm) hasSale=true;
+    const col=(dow===0||hol)?'color:#e06666;':dow===6?'color:#6fa8dc;':'';
+    h1+=`<th style="${col}min-width:26px;">${d}<div class="xs" style="${col}">${W[dow]}</div></th>`;
+    h2+=`<td class="xs" style="color:#e06666;">${hol?esc(hol.slice(0,4)):''}</td>`;
+    h3+=`<td class="xs" style="${sm?'color:#e08b1f;font-weight:700;':''}">${sm?Math.round(sm.factor*100)+'%<div class="xs" style="font-weight:400;">'+esc(sm.names.map(n=>n.slice(0,6)).join('/'))+'</div>':''}</td>`;
+  }
+  h1+='</tr>'; h2+='</tr>'; h3+='</tr>';
+  if(!hasHol && !hasSale) return '';
+  return `<div style="margin-top:10px;">
+    <div class="xs fw7" style="margin-bottom:4px;">祝日・セールの日（シフト表とは別の表です）</div>
+    <div class="tw" style="max-height:none;"><table>
+      <thead>${h1}</thead><tbody>${hasHol?h2:''}${hasSale?h3:''}</tbody></table></div>
+  </div>`;
+}
+
 // ★ 2026-09-24.9: その月のセール予定の一覧（媒体名・セール名が分かるように）
 function saleListHTML(mon, saleMap){
   const keys=Object.keys(saleMap||{}).sort();
