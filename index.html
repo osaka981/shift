@@ -81,7 +81,7 @@
 <header>
   <div>
     <h1>大阪急配　シフト表</h1>
-    <div class="ver" id="app-ver">ver 2026-09-24.11</div>
+    <div class="ver" id="app-ver">ver 2026-09-24.12</div>
   </div>
   <div class="row" style="margin-left:auto;">
     <select id="sh-off" class="fi" style="display:none;"></select>
@@ -151,7 +151,7 @@ document.dispatchEvent(new Event('fb-sdk-ready'));
 
 <script>
 'use strict';
-const APP_VER = '2026-09-24.11';
+const APP_VER = '2026-09-24.12';
 console.log('[シフト表] APP_VER', APP_VER);
 
 const FB_CONFIG = {
@@ -323,12 +323,66 @@ function cellLabel(office, v){
   }
   return SHIFT_LABEL[v]||'';
 }
-function staffOf(office){
-  return (D.staff||[]).filter(s=>{
+// ★ 2026-09-24.12: 表示順と非表示は営業所ごとに設定として保存する
+function staffKey(st){ return String(st.empNo||st.id); }
+function orderOf(office){ return (D.settings?.order||{})[office] || []; }
+function hiddenOf(office){ return (D.settings?.hidden||{})[office] || []; }
+let _showHidden=false;
+function staffOf(office, all){
+  const list=(D.staff||[]).filter(s=>{
     if(!s || s.status==='終了') return false;
     if(s.office===office) return true;
     return (s.subOffices||[]).some(o=>(typeof o==='string'?o:o?.name)===office);
-  }).sort((a,b)=>String(a.empNo||'').localeCompare(String(b.empNo||'')));
+  });
+  const ord=orderOf(office);
+  list.sort((a,b)=>{
+    const ia=ord.indexOf(staffKey(a)), ib=ord.indexOf(staffKey(b));
+    if(ia>=0 || ib>=0){
+      if(ia<0) return 1; if(ib<0) return -1;
+      return ia-ib;
+    }
+    return String(a.empNo||'').localeCompare(String(b.empNo||''));
+  });
+  if(all || _showHidden) return list;
+  const hid=hiddenOf(office);
+  return list.filter(s=>!hid.includes(staffKey(s)));
+}
+async function saveStaffPrefs(office, order, hidden){
+  const st={...(D.settings||{})};
+  if(order){ st.order={...(st.order||{}), [office]:order}; }
+  if(hidden){ st.hidden={...(st.hidden||{}), [office]:hidden}; }
+  D.settings=st;
+  const ok=await fbSet('shift_settings', st);
+  render();
+  if(!ok) alert(`端末には保存しましたが、サーバーへの保存に失敗しました。\n理由：${_lastFbError||'不明'}`);
+}
+async function hideStaff(office, key){
+  const hid=[...hiddenOf(office)];
+  if(!hid.includes(key)) hid.push(key);
+  await saveStaffPrefs(office, null, hid);
+}
+async function showStaff(office, key){
+  const hid=hiddenOf(office).filter(k=>k!==key);
+  await saveStaffPrefs(office, null, hid);
+}
+function toggleShowHidden(){ _showHidden=!_showHidden; render(); }
+// 行のドラッグ並べ替え
+let _shDragFrom=null;
+function shRowDragStart(e, key){ _shDragFrom=key; try{ e.dataTransfer.effectAllowed='move'; e.dataTransfer.setData('text/plain', key); }catch(_){} }
+function shRowDragOver(e){ e.preventDefault(); const tr=e.currentTarget; if(tr&&tr.style) tr.style.outline='2px solid var(--accent)'; }
+function shRowDragEnd(){ document.querySelectorAll('#sh-table tbody tr').forEach(tr=>tr.style.outline=''); _shDragFrom=null; }
+async function shRowDrop(e, toKey){
+  e.preventDefault();
+  document.querySelectorAll('#sh-table tbody tr').forEach(tr=>tr.style.outline='');
+  const from=_shDragFrom || (e.dataTransfer?e.dataTransfer.getData('text/plain'):'');
+  _shDragFrom=null;
+  if(!from || from===toKey) return;
+  const office=$('sh-off').value||'';
+  const keys=staffOf(office, true).map(staffKey);
+  const fi=keys.indexOf(from), ti=keys.indexOf(toKey);
+  if(fi<0 || ti<0) return;
+  keys.splice(ti, 0, keys.splice(fi,1)[0]);
+  await saveStaffPrefs(office, keys, null);
 }
 // 直近6か月の平均持出（実績2か月以内・実績なしは新人80個）
 function avgMochidashi(st, mon){
@@ -446,8 +500,19 @@ function render(){
       if(v==='×') off++;
       tds+=`<td class="cell" data-k="${key}" data-v="${v}" onclick="${colMode?`pickCourse(this)`:`cycle(this)`}" style="${cellStyle(v)}">${cellLabel(office, v)}</td>`;
     }
-    body+=`<tr data-staff="${st.id}">
-      <td>${esc(st.name)}<div class="xs muted mono">${esc(st.empNo||'')}</div></td>
+    const _k=staffKey(st);
+    const _isHid=hiddenOf(office).includes(_k);
+    body+=`<tr data-staff="${st.id}" draggable="true" style="${_isHid?'opacity:.5;':''}"
+        ondragstart="shRowDragStart(event,'${_k}')" ondragover="shRowDragOver(event)"
+        ondrop="shRowDrop(event,'${_k}')" ondragend="shRowDragEnd(event)">
+      <td style="cursor:grab;" title="ドラッグで並べ替え">
+        <div style="display:flex;align-items:center;gap:4px;">
+          <span class="muted">⠿</span>
+          <div>${esc(st.name)}<div class="xs muted mono">${esc(st.empNo||'')}</div></div>
+          <button class="btn gh" style="margin-left:auto;padding:1px 5px;font-size:9px;"
+            onclick="event.stopPropagation();${_isHid?`showStaff('${esc(office)}','${_k}')`:`hideStaff('${esc(office)}','${_k}')`}">${_isHid?'表示':'非表示'}</button>
+        </div>
+      </td>
       ${tds}
       <td class="off">${off}</td>
       <td class="num">${av.avg}${av.isNew?'<div class="xs" style="color:var(--amb)">新人</div>':''}</td>
@@ -493,6 +558,10 @@ function render(){
         ? 'ますをタップすると、その日に回るコースを選べます（休・空も選べます）。コースは「集荷コース」で作ります。<br>'
         : 'ますをタップすると 〇 → × → ① → ② → ③ → 〜① → 〜② → 〜③ → 空 の順に変わります。<br>'}
       〇=終日／×=休／①②③=その便のみ／〜①〜②〜③=その便まで。人数は重み（終日1・〜②0.5・①0.3・②③0.2）で数えています。
+    </div>
+    <div class="row xs muted" style="margin-bottom:6px;gap:8px;">
+      <span>氏名をドラッグすると並べ替えできます。</span>
+      ${hiddenOf(office).length?`<button class="btn gh" style="padding:2px 8px;font-size:11px;" onclick="toggleShowHidden()">${_showHidden?'非表示の人を隠す':`非表示の ${hiddenOf(office).length}名 を表示`}</button>`:''}
     </div>
     <div class="xs muted" id="sh-scroll-hint" style="margin-bottom:4px;display:none;">表は横にスクロールできます。氏名の列は固定されます。</div>
     <div class="tw"><table id="sh-table"><thead>${head}</thead><tbody>${body}</tbody><tfoot>${foot}</tfoot></table></div>
@@ -1143,6 +1212,8 @@ window.setDepart=setDepart; window.setPost=setPost; window.setStop=setStop;
 window.addStop=addStop; window.moveStop=moveStop; window.delStop=delStop;
 window.saveWeights=saveWeights; window.pickOnMap=pickOnMap;
 window.csDragStart=csDragStart; window.csDragOver=csDragOver; window.csDrop=csDrop; window.csDragEnd=csDragEnd;
+window.shRowDragStart=shRowDragStart; window.shRowDragOver=shRowDragOver; window.shRowDrop=shRowDrop; window.shRowDragEnd=shRowDragEnd;
+window.hideStaff=hideStaff; window.showStaff=showStaff; window.toggleShowHidden=toggleShowHidden;
 
 $('sh-off').addEventListener('change', render);
 $('sh-mon').addEventListener('change', render);
