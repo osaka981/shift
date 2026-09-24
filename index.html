@@ -93,7 +93,7 @@
 <header>
   <div>
     <h1>大阪急配　シフト表</h1>
-    <div class="ver" id="app-ver">ver 2026-09-24.36</div>
+    <div class="ver" id="app-ver">ver 2026-09-24.37</div>
   </div>
   <div class="row" style="margin-left:auto;">
     <select id="sh-off" class="fi" style="display:none;"></select>
@@ -171,7 +171,7 @@ document.dispatchEvent(new Event('fb-sdk-ready'));
 
 <script>
 'use strict';
-const APP_VER = '2026-09-24.36';
+const APP_VER = '2026-09-24.37';
 console.log('[シフト表] APP_VER', APP_VER);
 
 const FB_CONFIG = {
@@ -977,10 +977,11 @@ function holidayNoteHTML(mon, last){
   if(!items.length) return '';
   return `<div class="xs" style="margin-top:8px;color:#e06666;">祝日：${items.map(esc).join('　')}</div>`;
 }
+// ★ 2026-09-24.37: 背景は土日祝の色を活かし、記号は文字色で分ける
 function cellStyle(v){
-  if(v==='×') return 'box-shadow:inset 0 0 0 99px rgba(217,83,79,.14);color:#d9534f;font-weight:800;';
-  if(String(v).startsWith('C:')) return 'box-shadow:inset 0 0 0 99px rgba(47,128,237,.16);font-size:10px;';
-  if(v && v!=='〇') return 'box-shadow:inset 0 0 0 99px rgba(224,139,31,.16);';
+  if(v==='×') return 'color:#d9534f;font-weight:800;';
+  if(String(v).startsWith('C:')) return 'color:#2f80ed;font-weight:700;font-size:10px;';
+  if(v && v!=='〇') return 'color:#2f80ed;font-weight:800;';
   return '';
 }
 // ★ 2026-09-24.5: 集荷のますはコースを選ぶ
