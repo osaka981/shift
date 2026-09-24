@@ -81,7 +81,7 @@
 <header>
   <div>
     <h1>大阪急配　シフト表</h1>
-    <div class="ver" id="app-ver">ver 2026-09-24.14</div>
+    <div class="ver" id="app-ver">ver 2026-09-24.15</div>
   </div>
   <div class="row" style="margin-left:auto;">
     <select id="sh-off" class="fi" style="display:none;"></select>
@@ -151,7 +151,7 @@ document.dispatchEvent(new Event('fb-sdk-ready'));
 
 <script>
 'use strict';
-const APP_VER = '2026-09-24.14';
+const APP_VER = '2026-09-24.15';
 console.log('[シフト表] APP_VER', APP_VER);
 
 const FB_CONFIG = {
@@ -468,6 +468,65 @@ function fillOffices(){
   renderOffTabs();
   render();
 }
+// ★ 2026-09-24.15: 媒体ごとの色
+const MEDIA_COLORS=['#c0392b','#2e7d32','#e67e22','#8e44ad','#2980b9','#c2185b','#00838f','#6d4c41'];
+function mediaColor(name){
+  let h=0; for(const ch of String(name||'')) h=(h*31+ch.charCodeAt(0))%997;
+  return MEDIA_COLORS[h%MEDIA_COLORS.length];
+}
+// 反映日ベースで「媒体 → 日 → セール名」を作る
+function saleLanes(mon){
+  const byMedia={};
+  (D.saleEvents||[]).forEach(e=>{
+    if(!e || !e.date) return;
+    const base=new Date(String(e.date).replace(/\//g,'-')+'T00:00:00');
+    if(isNaN(base)) return;
+    const d=new Date(base.getFullYear(), base.getMonth(), base.getDate()+(Number(e.shiftDays)||0));
+    if(`${d.getFullYear()}-${String(d.getMonth()+1).padStart(2,'0')}`!==mon) return;
+    const media=e.media||'その他';
+    (byMedia[media]=byMedia[media]||{})[d.getDate()]=e.name||'セール';
+  });
+  return byMedia;
+}
+// セール・祝日の帯（シフト表のヘッダーに入れて、日付の列とずれないようにする）
+function laneRowsHTML(mon, last){
+  let html='';
+  // 祝日
+  const hols=[];
+  for(let d=1; d<=last; d++){
+    const nm=holidayName(`${mon}-${String(d).padStart(2,'0')}`);
+    if(nm) hols.push({d, nm});
+  }
+  if(hols.length){
+    let tds='', d=1;
+    while(d<=last){
+      const hit=hols.find(h=>h.d===d);
+      if(hit){
+        tds+=`<th title="${esc(hit.nm)}" style="background:rgba(224,102,102,.25);color:#ffdede;font-size:9px;font-weight:700;white-space:nowrap;overflow:hidden;">${esc(hit.nm)}</th>`;
+      } else tds+='<th></th>';
+      d++;
+    }
+    html+=`<tr><th style="text-align:left;font-size:10px;">祝日</th>${tds}<th></th><th class="num"></th></tr>`;
+  }
+  // セール（媒体ごと・連続は1本）
+  const lanes=saleLanes(mon);
+  Object.keys(lanes).forEach(media=>{
+    const days=lanes[media];
+    const col=mediaColor(media);
+    let tds='', d=1;
+    while(d<=last){
+      const nm=days[d];
+      if(!nm){ tds+='<th></th>'; d++; continue; }
+      let span=1;
+      while(d+span<=last && days[d+span]===nm) span++;
+      tds+=`<th colspan="${span}" title="${esc(media)} ${esc(nm)}"
+        style="background:${col};color:#fff;font-size:9.5px;font-weight:700;white-space:nowrap;overflow:hidden;border-radius:3px;">${esc(nm)}</th>`;
+      d+=span;
+    }
+    html+=`<tr><th style="text-align:left;font-size:10px;color:${col};">${esc(media)}</th>${tds}<th></th><th class="num"></th></tr>`;
+  });
+  return html;
+}
 function render(){
   const root=$('sh-root'); if(!root) return;
   if(!$('sh-mon').value) $('sh-mon').value=new Date().toISOString().slice(0,7);
@@ -481,13 +540,20 @@ function render(){
   const data=shGet(office, mon);
   const wgt=weights();
   const colMode=isColOffice(office);   // ★ 2026-09-24.5: 集荷はコース名を入れる
-  let head='<tr><th style="min-width:110px;">氏名</th>';
+  const colBg=[];
+  for(let d=1; d<=last; d++){
+    const iso=`${mon}-${String(d).padStart(2,'0')}`;
+    const dow=new Date(iso+'T00:00:00').getDay();
+    const hol=holidayName(iso);
+    colBg[d] = (dow===0||hol) ? 'background:rgba(224,102,102,.10);' : dow===6 ? 'background:rgba(111,168,220,.10);' : '';
+  }
+  let head=laneRowsHTML(mon, last)+'<tr><th style="min-width:110px;">氏名</th>';
   for(let d=1; d<=last; d++){
     const iso=`${mon}-${String(d).padStart(2,'0')}`;
     const dow=new Date(iso+'T00:00:00').getDay();
     const hol=holidayName(iso);
     const col=(dow===0||hol)?'color:#e06666;':dow===6?'color:#6fa8dc;':'';
-    head+=`<th title="${esc(hol)}" style="${col}${hol?'background:rgba(224,102,102,.12);':''}min-width:26px;">${d}<div class="xs" style="${col}">${W[dow]}</div>${hol?`<div class="xs" style="color:#e06666;font-size:8px;line-height:1;">${esc(hol.slice(0,3))}</div>`:''}</th>`;
+    head+=`<th title="${esc(hol)}" style="${col}${colBg[d]}min-width:26px;">${d}<div class="xs" style="${col}">${W[dow]}</div></th>`;
   }
   head+='<th>休</th><th class="num">平均持出</th></tr>';
   let body='';
@@ -498,7 +564,7 @@ function render(){
       const key=cellKeyOf(st, d);
       const v=cellGet(data.cells, st, d);
       if(v==='×') off++;
-      tds+=`<td class="cell" data-k="${key}" data-v="${v}" onclick="${colMode?`pickCourse(this)`:`cycle(this)`}" style="${cellStyle(v)}">${cellLabel(office, v)}</td>`;
+      tds+=`<td class="cell" data-k="${key}" data-v="${v}" data-bg="${colBg[d]}" onclick="${colMode?`pickCourse(this)`:`cycle(this)`}" style="${colBg[d]}${cellStyle(v)}">${cellLabel(office, v)}</td>`;
     }
     const _k=staffKey(st);
     const _isHid=hiddenOf(office).includes(_k);
@@ -533,7 +599,7 @@ function render(){
   for(let d=1; d<=last; d++){
     let n=0;
     staff.forEach(st=>{ n += cellWeight(cellGet(data.cells, st, d), wgt); });
-    foot+=`<td class="people" data-d="${d}">${n?Math.round(n*10)/10:''}</td>`;
+    foot+=`<td class="people" data-d="${d}" style="${colBg[d]}">${n?Math.round(n*10)/10:''}</td>`;
   }
   foot+='<td></td><td class="num"></td></tr>';
   if(total){
@@ -564,7 +630,6 @@ function render(){
         : 'ますをタップすると 〇 → × → ① → ② → ③ → 〜① → 〜② → 〜③ → 空 の順に変わります。<br>'}
       〇=終日／×=休／①②③=その便のみ／〜①〜②〜③=その便まで。人数は重み（終日1・〜②0.5・①0.3・②③0.2）で数えています。
     </div>
-    ${saleBarsHTML(mon)}
     <div class="row xs muted" style="margin-bottom:6px;gap:8px;">
       <span>氏名をドラッグすると並べ替えできます。</span>
       ${hiddenOf(office).length?`<button class="btn gh" style="padding:2px 8px;font-size:11px;" onclick="toggleShowHidden()">${_showHidden?'非表示の人を隠す':`非表示の ${hiddenOf(office).length}名 を表示`}</button>`:''}
@@ -730,9 +795,9 @@ function weightsHTML(colMode){
   </div>`;
 }
 function cellStyle(v){
-  if(v==='×') return 'background:rgba(128,128,128,.18);';
-  if(String(v).startsWith('C:')) return 'background:rgba(47,128,237,.18);font-size:10px;';
-  if(v && v!=='〇') return 'background:rgba(224,139,31,.18);';
+  if(v==='×') return 'box-shadow:inset 0 0 0 99px rgba(128,128,128,.16);';
+  if(String(v).startsWith('C:')) return 'box-shadow:inset 0 0 0 99px rgba(47,128,237,.16);font-size:10px;';
+  if(v && v!=='〇') return 'box-shadow:inset 0 0 0 99px rgba(224,139,31,.16);';
   return '';
 }
 // ★ 2026-09-24.5: 集荷のますはコースを選ぶ
@@ -749,14 +814,14 @@ function pickCourse(td){
   const v = i===0 ? '' : i===1 ? '×' : 'C:'+list[i-2].id;
   td.dataset.v=v;
   td.innerHTML=cellLabel(office, v);
-  td.setAttribute('style', cellStyle(v));
+  td.setAttribute('style', (td.dataset.bg||'')+cellStyle(v));
   recalc();
 }
 function cycle(td){
   const i=SHIFT_CODES.indexOf(td.dataset.v||'');
   const next=SHIFT_CODES[(i+1)%SHIFT_CODES.length];
   td.dataset.v=next; td.textContent=SHIFT_LABEL[next]||'';
-  td.setAttribute('style', cellStyle(next));
+  td.setAttribute('style', (td.dataset.bg||'')+cellStyle(next));
   recalc();
 }
 function recalc(){
@@ -779,7 +844,7 @@ function recalc(){
 function _applyCell(td, v){
   td.dataset.v=v;
   td.innerHTML=cellLabel($('sh-off').value||'', v);
-  td.setAttribute('style', cellStyle(v));
+  td.setAttribute('style', (td.dataset.bg||'')+cellStyle(v));
 }
 function fillAll(v){
   const label = v==='〇' ? '全員のすべての日を〇にします。' : '全員のすべての日を空にします。';
@@ -815,7 +880,7 @@ function weekly(){
       const dow=new Date(`${mon}-${String(d).padStart(2,'0')}T00:00:00`).getDay();
       if(!dows.includes(dow)) return;
       td.dataset.v=c; td.textContent=SHIFT_LABEL[c]||'';
-      td.setAttribute('style', cellStyle(c));
+      td.setAttribute('style', (td.dataset.bg||'')+cellStyle(c));
     });
   });
   recalc();
