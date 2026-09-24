@@ -93,7 +93,7 @@
 <header>
   <div>
     <h1>大阪急配　シフト表</h1>
-    <div class="ver" id="app-ver">ver 2026-09-24.32</div>
+    <div class="ver" id="app-ver">ver 2026-09-24.33</div>
   </div>
   <div class="row" style="margin-left:auto;">
     <select id="sh-off" class="fi" style="display:none;"></select>
@@ -167,7 +167,7 @@ document.dispatchEvent(new Event('fb-sdk-ready'));
 
 <script>
 'use strict';
-const APP_VER = '2026-09-24.32';
+const APP_VER = '2026-09-24.33';
 console.log('[シフト表] APP_VER', APP_VER);
 
 const FB_CONFIG = {
@@ -952,6 +952,7 @@ function pickCourse(td){
 }
 // ★ 2026-09-24.31: 矢印キーとEnterでますを移動、リストは矢印キーで選ぶ
 function cellKey(e, td){
+  if(document.querySelector('.pick-menu')) return;   // リストを開いている間は動かさない
   const cells=[...document.querySelectorAll('#sh-table .cell')];
   const cols=Number(td.closest('table').querySelectorAll('thead tr:last-child th').length)-3;
   const i=cells.indexOf(td);
@@ -984,11 +985,14 @@ function openPickMenu(td, items, onPick){
     const el=ev.target.closest('[data-i]'); if(!el) return;
     ev.preventDefault(); close(); onPick(items[Number(el.dataset.i)].value);
   });
+  // ★ 2026-09-24.33: リストを開いている間は、ますの移動にキーを渡さない
   const key=ev=>{
-    if(ev.key==='ArrowDown'){ idx=(idx+1)%items.length; draw(); ev.preventDefault(); }
-    else if(ev.key==='ArrowUp'){ idx=(idx-1+items.length)%items.length; draw(); ev.preventDefault(); }
-    else if(ev.key==='Enter'){ ev.preventDefault(); const v=items[idx].value; close(); onPick(v); }
-    else if(ev.key==='Escape'){ close(); }
+    const stop=()=>{ ev.preventDefault(); ev.stopPropagation(); ev.stopImmediatePropagation(); };
+    if(ev.key==='ArrowDown'){ idx=(idx+1)%items.length; draw(); stop(); }
+    else if(ev.key==='ArrowUp'){ idx=(idx-1+items.length)%items.length; draw(); stop(); }
+    else if(ev.key==='Enter'){ stop(); const v=items[idx].value; close(); onPick(v); }
+    else if(ev.key==='Escape'){ stop(); close(); }
+    else if(ev.key===' '){ stop(); }
   };
   function close(){ document.removeEventListener('keydown', key, true); box.remove(); td.focus(); }
   document.addEventListener('keydown', key, true);
