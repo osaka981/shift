@@ -93,7 +93,7 @@
 <header>
   <div>
     <h1>大阪急配　シフト表</h1>
-    <div class="ver" id="app-ver">ver 2026-09-24.43</div>
+    <div class="ver" id="app-ver">ver 2026-09-24.44</div>
   </div>
   <div class="row" style="margin-left:auto;">
     <select id="sh-off" class="fi" style="display:none;"></select>
@@ -184,7 +184,7 @@ document.dispatchEvent(new Event('fb-sdk-ready'));
 
 <script>
 'use strict';
-const APP_VER = '2026-09-24.43';
+const APP_VER = '2026-09-24.44';
 console.log('[シフト表] APP_VER', APP_VER);
 
 const FB_CONFIG = {
@@ -1649,7 +1649,8 @@ function renderCourse(selId){
     </div>
     <div class="row" style="margin-bottom:8px;">
       <span class="xs muted">出勤（出発）</span>
-      <input type="time" id="cs-depart" class="fi" value="${esc(c.depart||'10:00')}" onchange="setDepart(this.value)">
+      <input type="time" id="cs-depart" class="fi" value="${esc(c.depart||'10:00')}"
+        oninput="holdDepart(this.value)" onblur="commitCourseEdit()" onkeydown="if(event.key==='Enter'){this.blur();}">
       <span class="xs muted">郵便局持込</span>
       <input type="text" id="cs-post" class="fi" list="cs-post-list" style="width:180px;"
         value="${esc(c.post||'')}" placeholder="なし（店入れのみ）" onchange="setPost(this.value)">
@@ -1677,12 +1678,14 @@ function renderCourse(selId){
             <option value="origin"${st.loc==='origin'?' selected':''}>本社ロジ</option>
             <option value="map"${(st.loc&&typeof st.loc==='object')?' selected':''}>地図で指定</option>
           </select></td>
-          <td><input type="time" class="fi" style="width:96px;" value="${esc(st.at||'')}" onchange="setStop(${i},'at',this.value)"></td>
+          <td><input type="time" class="fi" style="width:100px;" value="${esc(st.at||'')}"
+            oninput="holdStop(${i},'at',this.value)" onblur="commitCourseEdit()" onkeydown="if(event.key==='Enter'){this.blur();}"></td>
           <td class="mono">${esc(row.arrive||'')}</td>
           <td class="mono">${esc(row.leave||'')}</td>
           <td class="mono xs">${row.move||0}分</td>
           <td class="mono xs" style="${row.wait?'color:#e08b1f;':''}">${row.wait?row.wait+'分':''}</td>
-          <td><input type="number" class="fi" style="width:60px;" value="${st.work!=null?st.work:''}" placeholder="${Number($('cs-work')?.value)||10}" onchange="setStop(${i},'work',this.value)"></td>
+          <td><input type="number" class="fi" style="width:64px;" value="${st.work!=null?st.work:''}" placeholder="${Number($('cs-work')?.value)||10}"
+            oninput="holdStop(${i},'work',this.value)" onblur="commitCourseEdit()" onkeydown="if(event.key==='Enter'){this.blur();}"></td>
           <td class="mono xs">${(row.km||0).toFixed(1)}km</td>
           <td>
             <button class="btn gh" style="padding:2px 6px;font-size:10px;" onclick="moveStop(${i},-1)">↑</button>
@@ -1719,6 +1722,21 @@ async function setOrigin(){
   renderCourse();
   alert(ok ? `出発地点を設定しました（${pos.src}：${pos.label||addr}）`
            : '端末には保存しましたが、サーバーへの保存に失敗しました。');
+}
+// ★ 2026-09-24.44: 入力中は描き直さず、欄から離れた時（またはEnter）に反映する
+function holdDepart(v){ const c=curCourse(); if(c) c.depart=v; }
+function holdStop(i, key, v){
+  const c=curCourse(); if(!c || !c.stops[i]) return;
+  if(key==='work') c.stops[i].work = v===''?null:Number(v);
+  else c.stops[i][key]=v;
+}
+function commitCourseEdit(){
+  // 他の欄へ移る途中で描き直すと入力が途切れるので、少し待ってから反映する
+  clearTimeout(window._csEditT);
+  window._csEditT=setTimeout(()=>{
+    if(document.activeElement && document.activeElement.closest && document.activeElement.closest('#cs-root input')) return;
+    renderCourse();
+  }, 150);
 }
 function setDepart(v){ const c=curCourse(); if(!c) return; c.depart=v; renderCourse(); }
 function setPost(v){ const c=curCourse(); if(!c) return; c.post=v||null; renderCourse(); }
@@ -1982,7 +2000,8 @@ window.saleBarsHTML=saleBarsHTML; window.showHelp=showHelp; window.setTheme=setT
 window.saveDraft=saveDraft; window.saveDowOverride=saveDowOverride; window.clearDowOverride=clearDowOverride;
 window.pickMonth=pickMonth; window.setOrigin=setOrigin;
 window.pickOriginOnMap=pickOriginOnMap; window.pickPostOnMap=pickPostOnMap;
-window.mapSearch=mapSearch; window.useFound=useFound; window.fillAll=fillAll; window.fillRow=fillRow;
+window.mapSearch=mapSearch; window.useFound=useFound;
+window.holdDepart=holdDepart; window.holdStop=holdStop; window.commitCourseEdit=commitCourseEdit; window.fillAll=fillAll; window.fillRow=fillRow;
 
 $('sh-off').addEventListener('change', ()=>{ if(confirmLeave()){ _work={}; clearDirty(); render(); } });
 $('sh-mon').addEventListener('change', ()=>{ if(confirmLeave()){ _work={}; clearDirty(); render(); } });
