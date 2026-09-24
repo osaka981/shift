@@ -48,17 +48,24 @@
   .al-e{background:rgba(217,83,79,.12);border:1px solid rgba(217,83,79,.4);}
   .mono{font-family:var(--mono);}
 </style>
+<link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css">
+<script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
 </head>
 <body>
 <header>
   <div>
     <h1>大阪急配　シフト表</h1>
-    <div class="ver" id="app-ver">ver 2026-09-24.3</div>
+    <div class="ver" id="app-ver">ver 2026-09-24.7</div>
   </div>
   <div class="row" style="margin-left:auto;">
-    <select id="sh-off" class="fi"></select>
+    <select id="sh-off" class="fi" style="display:none;"></select>
     <input type="month" id="sh-mon" class="fi">
     <span id="fb-state" class="xs muted">接続中…</span>
+  </div>
+  <div class="row" id="off-tabs" style="flex-basis:100%;gap:4px;"></div>
+  <div class="row" id="view-tabs" style="flex-basis:100%;gap:4px;">
+    <button class="btn" id="vt-shift" onclick="setView('shift')">シフト表</button>
+    <button class="btn gh" id="vt-course" onclick="setView('course')">集荷コース</button>
   </div>
 </header>
 
@@ -83,8 +90,28 @@
       <span class="xs muted" id="fc-note" style="flex-basis:100%;"></span>
     </div>
   </div>
-  <div class="card">
-    <div id="sh-root"><div class="al al-w">読み込み中です…</div></div>
+  <div id="shift-wrap">
+    <div class="card">
+      <div id="sh-root"><div class="al al-w">読み込み中です…</div></div>
+    </div>
+  </div>
+  <div id="course-wrap" style="display:none;">
+    <div class="card">
+      <div class="row" style="justify-content:space-between;">
+        <div class="row">
+          <select id="cs-sel" class="fi" onchange="renderCourse()"></select>
+          <button class="btn gh" onclick="newCourse()">＋コースを追加</button>
+          <button class="btn gh" onclick="delCourse()">削除</button>
+        </div>
+        <div class="row xs muted">
+          平均速度 <input type="number" id="cs-speed" class="fi" style="width:60px;" value="25" onchange="renderCourse()"> km/h
+          　店入れ <input type="number" id="cs-work" class="fi" style="width:55px;" value="10" onchange="renderCourse()"> 分
+          　持込 <input type="number" id="cs-post-work" class="fi" style="width:55px;" value="20" onchange="renderCourse()"> 分
+        </div>
+      </div>
+    </div>
+    <div class="card"><div id="cs-root"></div></div>
+    <div class="card"><div id="cs-map" style="height:420px;border-radius:6px;"></div></div>
   </div>
 </div>
 
@@ -98,7 +125,7 @@ document.dispatchEvent(new Event('fb-sdk-ready'));
 
 <script>
 'use strict';
-const APP_VER = '2026-09-24.3';
+const APP_VER = '2026-09-24.7';
 console.log('[シフト表] APP_VER', APP_VER);
 
 const FB_CONFIG = {
@@ -124,6 +151,10 @@ const D = {
   departments: lsGet('nikki_departments', []) || [],
   delivery: lsGet('nikki_delivery', []) || [],
   shifts: lsGet('nikki_shifts', {}) || {},
+  settings: lsGet('nikki_shift_settings', {}) || {},
+  customers: lsGet('nikki_customers', []) || [],
+  offices: lsGet('nikki_offices', []) || [],
+  courses: lsGet('nikki_col_courses', []) || [],
   saleEvents: lsGet('nikki_sale_events', []) || [],   // ★ 2026-09-24.3: セールカレンダー
 };
 let fbDB = null;
@@ -162,6 +193,15 @@ async function initFirebase(){
   sub('delivery','delivery', render);
   sub('shifts','shifts', render);
   sub('sale_events','saleEvents', render);
+  sub('customers','customers', ()=>{ if(_view==='course') renderCourse(); });
+  sub('offices','offices', ()=>{ if(_view==='course') renderCourse(); });
+  sub('col_courses','courses', ()=>{ if(_view==='course') renderCourse(); });
+  onValue(ref(fbDB,'nikki/shift_settings'), snap=>{
+    if(!snap.exists()) return;
+    D.settings=snap.val()||{};
+    lsSet('nikki_shift_settings', D.settings);
+    render();
+  }, err=>console.warn('[shift_settings]', err && err.message));
   setState('接続済み', true);
 }
 async function fbSet(node, value){
@@ -175,8 +215,25 @@ async function fbSet(node, value){
 // ══ シフト表 ══
 const SHIFT_CODES = ['', '〇', '×', '1', '2', '3', '~1', '~2', '~3'];
 const SHIFT_LABEL = {'':'', '〇':'〇', '×':'×', '1':'①', '2':'②', '3':'③', '~1':'〜①', '~2':'〜②', '~3':'〜③'};
-const SHIFT_WEIGHT_DEF = {'〇':1, '×':0, '1':0.3, '2':0.2, '3':0.2, '~1':0.3, '~2':0.5, '~3':1};
-const weights = () => ({...SHIFT_WEIGHT_DEF, ...(lsGet('shift_weights', null)||{})});
+// ★ 2026-09-24.7: 終日1として各便0.3ずつ。〜③は終日と同じ1
+const SHIFT_WEIGHT_DEF = {'〇':1, '×':0, '1':0.3, '2':0.3, '3':0.3, '~1':0.3, '~2':0.6, '~3':1};
+const weights = () => ({...SHIFT_WEIGHT_DEF, ...(D.settings?.weights||{})});
+async function saveWeights(){
+  const w={};
+  ['〇','1','2','3','~1','~2','~3'].forEach(k=>{
+    const el=document.querySelector(`.wgt-in[data-k="${k}"]`);
+    if(el) w[k]=Number(el.value)||0;
+  });
+  D.settings={...(D.settings||{}), weights:w};
+  const ok=await fbSet('shift_settings', D.settings);
+  render();
+  if(!ok) alert('端末には保存しましたが、サーバーへの保存に失敗しました。');
+}
+function cellWeight(v, wgt){
+  if(!v) return 0;
+  if(String(v).startsWith('C:')) return 1;   // コースは1人分
+  return wgt[v]||0;
+}
 const shKey = (office, mon) => `${office}__${mon}`;
 const shGet = (office, mon) => (D.shifts||{})[shKey(office,mon)] || {cells:{}, updatedAt:null};
 
@@ -189,6 +246,31 @@ function delOffices(){
   let locs=(D.locations||[]).filter(l=>l && l.active!==false);
   if(id!=null) locs=locs.filter(l=>!(l.deptIds||[]).length || (l.deptIds||[]).map(String).includes(String(id)));
   return locs.sort((a,b)=>(a.order||99)-(b.order||99)).map(l=>l.name);
+}
+// ★ 2026-09-24.5: 集荷の拠点か（部署マスタの集荷事業部が付いている拠点）
+// ★ 2026-09-24.5: セルのキーは社員番号。日報アプリ側も社員番号で見るため。
+//   以前保存した「従業員IDのキー」も読み込めるようにする。
+function cellKeyOf(st, d){ return `${st.empNo||st.id}|${d}`; }
+function cellGet(cells, st, d){
+  if(!cells) return '';
+  return cells[cellKeyOf(st,d)] ?? cells[`${st.id}|${d}`] ?? '';
+}
+function isColOffice(name){
+  const dep=(D.departments||[]).find(x=>x && x.type==='col');
+  if(!dep) return false;
+  const loc=(D.locations||[]).find(l=>l && l.name===name);
+  return !!loc && (loc.deptIds||[]).map(String).includes(String(dep.id));
+}
+function courseById(id){ return (D.courses||[]).find(c=>String(c.id)===String(id)) || null; }
+// セルの表示（集荷拠点はコース名、宅配は記号）
+function cellLabel(office, v){
+  if(!v) return '';
+  if(v==='×') return '×';
+  if(String(v).startsWith('C:')){
+    const c=courseById(String(v).slice(2));
+    return c ? esc(c.name.replace(/コース$/,'')) : '?';
+  }
+  return SHIFT_LABEL[v]||'';
 }
 function staffOf(office){
   return (D.staff||[]).filter(s=>{
@@ -278,6 +360,7 @@ function fillOffices(){
   sel.innerHTML=offs.map(n=>`<option value="${esc(n)}">${esc(n)}</option>`).join('');
   if(cur && offs.includes(cur)) sel.value=cur;
   _filling=false;
+  renderOffTabs();
   render();
 }
 function render(){
@@ -292,6 +375,7 @@ function render(){
   const W='日月火水木金土';
   const data=shGet(office, mon);
   const wgt=weights();
+  const colMode=isColOffice(office);   // ★ 2026-09-24.5: 集荷はコース名を入れる
   let head='<tr><th style="min-width:110px;">氏名</th>';
   for(let d=1; d<=last; d++){
     const dow=new Date(`${mon}-${String(d).padStart(2,'0')}T00:00:00`).getDay();
@@ -304,10 +388,10 @@ function render(){
     const av=avgMochidashi(st, mon);
     let off=0, tds='';
     for(let d=1; d<=last; d++){
-      const key=`${st.id}|${d}`;
-      const v=data.cells?.[key]||'';
+      const key=cellKeyOf(st, d);
+      const v=cellGet(data.cells, st, d);
       if(v==='×') off++;
-      tds+=`<td class="cell" data-k="${key}" data-v="${v}" onclick="cycle(this)" style="${cellStyle(v)}">${SHIFT_LABEL[v]||''}</td>`;
+      tds+=`<td class="cell" data-k="${key}" data-v="${v}" onclick="${colMode?`pickCourse(this)`:`cycle(this)`}" style="${cellStyle(v)}">${cellLabel(office, v)}</td>`;
     }
     body+=`<tr data-staff="${st.id}">
       <td>${esc(st.name)}<div class="xs muted mono">${esc(st.empNo||'')}</div></td>
@@ -325,7 +409,7 @@ function render(){
   let foot='<tr><td>人数</td>';
   for(let d=1; d<=last; d++){
     let n=0;
-    staff.forEach(st=>{ n += (wgt[data.cells?.[`${st.id}|${d}`]||'']||0); });
+    staff.forEach(st=>{ n += cellWeight(cellGet(data.cells, st, d), wgt); });
     foot+=`<td class="people" data-d="${d}">${n?Math.round(n*10)/10:''}</td>`;
   }
   foot+='<td></td><td class="num"></td></tr>';
@@ -335,7 +419,7 @@ function render(){
     let r1='<tr><td class="num">予測（個）</td>', r2='<tr><td class="num">対応できる数</td>', r3='<tr><td class="num">過不足</td>';
     for(let d=1; d<=last; d++){
       let cap=0;
-      staff.forEach(st=>{ cap += (avgMap[st.id]||0) * (wgt[data.cells?.[`${st.id}|${d}`]||'']||0); });
+      staff.forEach(st=>{ cap += (avgMap[st.id]||0) * cellWeight(cellGet(data.cells, st, d), wgt); });
       cap=Math.round(cap);
       const need=plan[d-1]||0;
       const diff=cap-need;
@@ -373,10 +457,14 @@ function render(){
   root.innerHTML=`
     ${total?`<div class="xs muted" style="margin-bottom:6px;">予測は月合計 ${total.toLocaleString()}個を曜日係数で配分しています${dw.hasData?'（直近6か月の実績から算出）':'（実績が足りないため全曜日を同じ比率にしています）'}。赤字は人手不足、青字は余力です。</div>`:''}
     <div class="xs muted" style="margin-bottom:6px;">
-      ますをタップすると 〇 → × → ① → ② → ③ → 〜① → 〜② → 〜③ → 空 の順に変わります。<br>
+      ${colMode
+        ? 'ますをタップすると、その日に回るコースを選べます（休・空も選べます）。コースは「集荷コース」で作ります。<br>'
+        : 'ますをタップすると 〇 → × → ① → ② → ③ → 〜① → 〜② → 〜③ → 空 の順に変わります。<br>'}
       〇=終日／×=休／①②③=その便のみ／〜①〜②〜③=その便まで。人数は重み（終日1・〜②0.5・①0.3・②③0.2）で数えています。
     </div>
     <div class="tw"><table id="sh-table"><thead>${head}</thead><tbody>${body}</tbody><tfoot>${foot}</tfoot></table></div>
+    ${colMode?courseSummaryHTML(office, mon, data):''}
+    ${weightsHTML(colMode)}
     <div class="row" style="justify-content:flex-end;margin-top:10px;">
       <span class="xs muted" style="margin-right:auto;">${data.updatedAt?`最終更新 ${new Date(data.updatedAt).toLocaleString('ja-JP')}`:'未保存'}</span>
       <button class="btn gh" onclick="weekly()">曜日で一括設定</button>
@@ -385,10 +473,68 @@ function render(){
     </div>`;
   refreshForecastInputs();
 }
+// ★ 2026-09-24.6: コースの所要時間の一覧（出勤時間の振り分け用）
+function courseSummaryHTML(office, mon, data){
+  const list=(D.courses||[]).filter(c=>!c.office || c.office===office);
+  if(!list.length) return '<div class="al al-w" style="margin-top:10px;">コースがありません。「集荷コース」で作ってください。</div>';
+  const [y,m]=mon.split('-').map(Number);
+  const last=new Date(y,m,0).getDate();
+  const used={};
+  Object.values(data.cells||{}).forEach(v=>{ if(String(v).startsWith('C:')) used[String(v).slice(2)]=(used[String(v).slice(2)]||0)+1; });
+  const rows=list.map(c=>{
+    const r=calcCourse(c);
+    return `<tr>
+      <td style="text-align:left;">${esc(c.name)}</td>
+      <td class="mono">${esc(c.depart||'')}</td>
+      <td class="mono">${min2hm(r.endMin)}</td>
+      <td class="mono">${Math.floor(r.totalMin/60)}時間${String(r.totalMin%60).padStart(2,'0')}分</td>
+      <td class="mono">${r.km.toFixed(1)}km</td>
+      <td class="mono">${(c.stops||[]).length}件</td>
+      <td class="mono">${used[c.id]||0}日</td>
+    </tr>`;
+  }).join('');
+  return `<div style="margin-top:12px;">
+    <div class="xs fw7" style="margin-bottom:4px;">コースの所要時間（出勤時間の振り分けの目安）</div>
+    <div class="tw" style="max-height:none;"><table>
+      <thead><tr><th>コース</th><th>出発</th><th>終了</th><th>所要</th><th>走行</th><th>立ち寄り</th><th>この月の割当</th></tr></thead>
+      <tbody>${rows}</tbody></table></div>
+  </div>`;
+}
+// 重みの設定
+function weightsHTML(colMode){
+  if(colMode) return '';
+  const w=weights();
+  const item=(k,label)=>`<span class="xs muted">${label}</span>
+    <input type="number" step="0.1" class="fi wgt-in" data-k="${k}" style="width:56px;" value="${w[k]}">`;
+  return `<div class="row" style="margin-top:12px;gap:6px;align-items:center;">
+    <span class="xs fw7">人数の重み</span>
+    ${item('〇','終日')}${item('1','①のみ')}${item('2','②のみ')}${item('3','③のみ')}
+    ${item('~1','〜①')}${item('~2','〜②')}${item('~3','〜③')}
+    <button class="btn gh" onclick="saveWeights()">重みを保存</button>
+  </div>`;
+}
 function cellStyle(v){
   if(v==='×') return 'background:rgba(128,128,128,.18);';
+  if(String(v).startsWith('C:')) return 'background:rgba(47,128,237,.18);font-size:10px;';
   if(v && v!=='〇') return 'background:rgba(224,139,31,.18);';
   return '';
+}
+// ★ 2026-09-24.5: 集荷のますはコースを選ぶ
+function pickCourse(td){
+  const office=$('sh-off').value||'';
+  const list=(D.courses||[]).filter(c=>!c.office || c.office===office);
+  if(!list.length){ alert('コースがありません。「集荷コース」で作ってください。'); return; }
+  const cur=td.dataset.v||'';
+  const menu=['（空にする）','休み（×）',...list.map(c=>c.name)];
+  const pick=prompt(`この日の担当を選んでください（番号）\n`+menu.map((m,i)=>`${i}: ${m}`).join('\n'), '0');
+  if(pick===null) return;
+  const i=Number(pick);
+  if(!Number.isInteger(i) || i<0 || i>=menu.length) return;
+  const v = i===0 ? '' : i===1 ? '×' : 'C:'+list[i-2].id;
+  td.dataset.v=v;
+  td.innerHTML=cellLabel(office, v);
+  td.setAttribute('style', cellStyle(v));
+  recalc();
 }
 function cycle(td){
   const i=SHIFT_CODES.indexOf(td.dataset.v||'');
@@ -408,7 +554,7 @@ function recalc(){
     const d=td.dataset.d; let n=0;
     document.querySelectorAll('#sh-table tbody tr').forEach(tr=>{
       const cell=tr.querySelector(`.cell[data-k$="|${d}"]`);
-      if(cell) n += (wgt[cell.dataset.v||'']||0);
+      if(cell) n += cellWeight(cell.dataset.v||'', wgt);
     });
     td.textContent = n ? Math.round(n*10)/10 : '';
   });
@@ -573,6 +719,277 @@ async function saveForecast(){
   render();
   if(!ok) alert('端末には保存しましたが、サーバーへの保存に失敗しました。通信を確認してください。');
 }
+
+// ══════════════════════════════════════════════════
+//  ★ 2026-09-24.4: 集荷コース（配車）
+//   コースは人と切り離した箱。立ち寄り順・指定時刻・郵便局持込を持ち、
+//   直線距離×1.3を道のりの目安として所要時間を積み上げる。
+// ══════════════════════════════════════════════════
+let _view='shift';
+let _csMap=null, _csLayer=null;
+function setView(v){
+  _view=v;
+  $('shift-wrap').style.display = v==='shift' ? '' : 'none';
+  $('course-wrap').style.display = v==='course' ? '' : 'none';
+  $('vt-shift').className = v==='shift' ? 'btn' : 'btn gh';
+  $('vt-course').className = v==='course' ? 'btn' : 'btn gh';
+  if(v==='course') renderCourse(); else render();
+}
+function renderOffTabs(){
+  const box=$('off-tabs'); if(!box) return;
+  const offs=delOffices();
+  const cols=(D.locations||[]).filter(l=>l && l.active!==false && !offs.includes(l.name)).map(l=>l.name);
+  const all=[...offs, ...cols];
+  const cur=$('sh-off').value || all[0] || '';
+  if($('sh-off') && !$('sh-off').value && cur) $('sh-off').value=cur;
+  box.innerHTML = all.map(n=>`<button class="btn ${n===cur?'':'gh'}" onclick="pickOffice('${esc(n).replace(/'/g,"\\'")}')">${esc(n)}</button>`).join('');
+}
+function pickOffice(name){
+  const sel=$('sh-off');
+  if(sel && ![...sel.options].some(o=>o.value===name)){
+    const op=document.createElement('option'); op.value=name; op.textContent=name; sel.appendChild(op);
+  }
+  if(sel) sel.value=name;
+  renderOffTabs();
+  if(_view==='course') renderCourse(); else render();
+}
+// ── コースのデータ ──
+function courses(){ return (D.courses||[]).filter(c=>c && (!c.office || c.office===($('sh-off').value||''))); }
+function curCourse(){
+  const id=$('cs-sel')?.value||'';
+  return (D.courses||[]).find(c=>String(c.id)===String(id)) || null;
+}
+async function saveCourses(){
+  const ok=await fbSet('col_courses', D.courses||[]);
+  if(!ok) alert('端末には保存しましたが、サーバーへの保存に失敗しました。');
+}
+async function newCourse(){
+  const name=prompt('コース名（例：都島コース）','');
+  if(name===null || !name.trim()) return;
+  const c={ id:Date.now(), office:$('sh-off').value||'', name:name.trim(),
+    depart:'10:00', stops:[], post:null, updatedAt:new Date().toISOString() };
+  D.courses=[...(D.courses||[]), c];
+  await saveCourses();
+  renderCourse(c.id);
+}
+async function delCourse(){
+  const c=curCourse(); if(!c) return;
+  if(!confirm(`${c.name} を削除しますか？`)) return;
+  D.courses=(D.courses||[]).filter(x=>String(x.id)!==String(c.id));
+  await saveCourses();
+  renderCourse();
+}
+// ── 距離・時間 ──
+function distKm(a, b){
+  if(!a || !b || !a.lat || !b.lat) return 0;
+  const R=6371, rad=x=>x*Math.PI/180;
+  const dLat=rad(b.lat-a.lat), dLng=rad(b.lng-a.lng);
+  const s=Math.sin(dLat/2)**2 + Math.cos(rad(a.lat))*Math.cos(rad(b.lat))*Math.sin(dLng/2)**2;
+  return 2*R*Math.asin(Math.sqrt(s));
+}
+const ROAD_RATIO = 1.3;   // 直線距離 → 道のりの目安
+function hm2min(v){ const [h,m]=String(v||'0:00').split(':').map(Number); return (h||0)*60+(m||0); }
+function min2hm(v){ v=Math.max(0,Math.round(v)); return `${String(Math.floor(v/60)%24).padStart(2,'0')}:${String(v%60).padStart(2,'0')}`; }
+function custPos(id){
+  const c=(D.customers||[]).find(x=>String(x.id)===String(id));
+  if(!c) return null;
+  return {lat:Number(c.lat)||0, lng:Number(c.lng)||0, name:c.name, addr:(c.puSameAsAddr===false&&c.puAddr)?c.puAddr:(c.addr||'')};
+}
+function officePos(name){
+  const o=(D.offices||[]).find(x=>x && x.name===name);
+  if(!o) return null;
+  return {lat:Number(o.lat)||0, lng:Number(o.lng)||0, name:o.name, addr:o.addr||''};
+}
+// コースの時間を積み上げる
+function calcCourse(c){
+  const speed=Number($('cs-speed')?.value)||25;
+  const workDef=Number($('cs-work')?.value)||10;
+  const postWork=Number($('cs-post-work')?.value)||20;
+  const start=officePos($('sh-off').value||'') || null;
+  let t=hm2min(c.depart||'10:00');
+  let prev=start, km=0;
+  const rows=[];
+  (c.stops||[]).forEach(st=>{
+    const p=custPos(st.custId);
+    const d=(prev&&p)?distKm(prev,p)*ROAD_RATIO:0;
+    km+=d;
+    const move=speed>0?Math.round(d/speed*60):0;
+    t+=move;
+    let wait=0;
+    if(st.at){ const want=hm2min(st.at); if(want>t){ wait=want-t; t=want; } }
+    const arrive=t;
+    const work=Number(st.work)||workDef;
+    t+=work;
+    rows.push({name:p?p.name:'(位置なし)', arrive:min2hm(arrive), leave:min2hm(t),
+      move, wait, work, km:d, at:st.at||'', noPos:!p||!p.lat});
+    if(p&&p.lat) prev=p;
+  });
+  if(c.post){
+    const p=officePos(c.post);
+    const d=(prev&&p)?distKm(prev,p)*ROAD_RATIO:0;
+    km+=d;
+    const move=speed>0?Math.round(d/speed*60):0;
+    t+=move;
+    const arrive=t;
+    t+=postWork;
+    rows.push({name:`${c.post}（持込）`, arrive:min2hm(arrive), leave:min2hm(t),
+      move, wait:0, work:postWork, km:d, at:'', post:true, noPos:!p||!p.lat});
+    if(p&&p.lat) prev=p;
+  }
+  // 営業所へ戻る
+  if(start && prev && prev!==start){
+    const d=distKm(prev,start)*ROAD_RATIO; km+=d;
+    const move=speed>0?Math.round(d/speed*60):0;
+    t+=move;
+    rows.push({name:`${start.name}（帰社）`, arrive:min2hm(t), leave:'', move, wait:0, work:0, km:d, back:true});
+  }
+  return {rows, endMin:t, km, totalMin:t-hm2min(c.depart||'10:00')};
+}
+function renderCourse(selId){
+  renderOffTabs();
+  const sel=$('cs-sel'); if(!sel) return;
+  const list=courses();
+  const cur=selId!=null?String(selId):(sel.value||'');
+  sel.innerHTML = list.length ? list.map(c=>`<option value="${c.id}">${esc(c.name)}</option>`).join('')
+    : '<option value="">（コースなし）</option>';
+  if(cur && list.some(c=>String(c.id)===cur)) sel.value=cur;
+  const c=curCourse();
+  const root=$('cs-root');
+  if(!c){ root.innerHTML='<div class="al al-w">「＋コースを追加」でコースを作ってください。</div>'; drawMap(null); return; }
+  const r=calcCourse(c);
+  // ★ 2026-09-24.7: 営業所の位置が無いと、1件目までの移動が0分になる
+  const startPos=officePos($('sh-off').value||'');
+  const startWarn = (!startPos || !startPos.lat)
+    ? `<div class="al al-e" style="margin-bottom:8px;">${esc($('sh-off').value||'営業所')}の位置が未設定です。営業所から1件目までの移動時間が0分で計算されています。経営管理の郵便局一覧でこの営業所を開き、所在地から位置を取得してください。</div>` : '';
+  const opts=(D.customers||[]).slice().sort((a,b)=>String(a.custNo||'').localeCompare(String(b.custNo||'')))
+    .map(x=>`<option value="${x.id}">${esc(x.custNo||'')} ${esc(x.name)}</option>`).join('');
+  const offOpts=(D.offices||[]).map(o=>`<option value="${esc(o.name)}"${c.post===o.name?' selected':''}>${esc(o.name)}</option>`).join('');
+  root.innerHTML=startWarn+`
+    <div class="row" style="margin-bottom:8px;">
+      <span class="xs muted">出勤（出発）</span>
+      <input type="time" id="cs-depart" class="fi" value="${esc(c.depart||'10:00')}" onchange="setDepart(this.value)">
+      <span class="xs muted">郵便局持込</span>
+      <select id="cs-post" class="fi" onchange="setPost(this.value)">
+        <option value="">なし（店入れのみ）</option>${offOpts}
+      </select>
+      <span class="xs muted">所要 <b>${Math.floor(r.totalMin/60)}時間${String(r.totalMin%60).padStart(2,'0')}分</b>　終了 <b>${min2hm(r.endMin)}</b>　走行 約${r.km.toFixed(1)}km</span>
+    </div>
+    <div class="tw" style="max-height:none;"><table>
+      <thead><tr><th>順</th><th>立ち寄り先</th><th>指定</th><th>到着</th><th>出発</th><th>移動</th><th>待ち</th><th>作業</th><th>距離</th><th></th></tr></thead>
+      <tbody>
+        <tr style="background:var(--bg3);">
+          <td></td><td style="text-align:left;">${esc(startPos?startPos.name:'営業所')}（出発）</td><td></td>
+          <td class="mono">${esc(c.depart||'')}</td><td class="mono">${esc(c.depart||'')}</td>
+          <td></td><td></td><td></td><td></td><td></td>
+        </tr>
+        ${(c.stops||[]).map((st,i)=>{
+        const row=r.rows[i]||{};
+        return `<tr>
+          <td>${i+1}</td>
+          <td style="text-align:left;">${esc(row.name||'')}${row.noPos?'<span class="xs" style="color:#e06666;">（位置未設定）</span>':''}</td>
+          <td><input type="time" class="fi" style="width:96px;" value="${esc(st.at||'')}" onchange="setStop(${i},'at',this.value)"></td>
+          <td class="mono">${esc(row.arrive||'')}</td>
+          <td class="mono">${esc(row.leave||'')}</td>
+          <td class="mono xs">${row.move||0}分</td>
+          <td class="mono xs" style="${row.wait?'color:#e08b1f;':''}">${row.wait?row.wait+'分':''}</td>
+          <td><input type="number" class="fi" style="width:60px;" value="${st.work!=null?st.work:''}" placeholder="${Number($('cs-work')?.value)||10}" onchange="setStop(${i},'work',this.value)"></td>
+          <td class="mono xs">${(row.km||0).toFixed(1)}km</td>
+          <td>
+            <button class="btn gh" style="padding:2px 6px;font-size:10px;" onclick="moveStop(${i},-1)">↑</button>
+            <button class="btn gh" style="padding:2px 6px;font-size:10px;" onclick="moveStop(${i},1)">↓</button>
+            <button class="btn gh" style="padding:2px 6px;font-size:10px;" onclick="pickOnMap(${st.custId})" title="地図をクリックして位置を決める">位置</button>
+            <button class="btn gh" style="padding:2px 6px;font-size:10px;" onclick="delStop(${i})">×</button>
+          </td>
+        </tr>`;
+      }).join('')}</tbody>
+      ${r.rows.slice((c.stops||[]).length).map(row=>`<tr style="background:var(--bg3);">
+        <td></td><td style="text-align:left;">${esc(row.name)}</td><td></td>
+        <td class="mono">${esc(row.arrive||'')}</td><td class="mono">${esc(row.leave||'')}</td>
+        <td class="mono xs">${row.move||0}分</td><td></td><td class="mono xs">${row.work?row.work+'分':''}</td>
+        <td class="mono xs">${(row.km||0).toFixed(1)}km</td><td></td></tr>`).join('')}
+    </table></div>
+    <div class="row" style="margin-top:8px;">
+      <select id="cs-add" class="fi" style="max-width:280px;">${opts}</select>
+      <button class="btn gh" onclick="addStop()">立ち寄り先を追加</button>
+      <button class="btn grn" style="margin-left:auto;" onclick="saveCourses()">コースを保存</button>
+    </div>`;
+  drawMap(c);
+}
+function setDepart(v){ const c=curCourse(); if(!c) return; c.depart=v; renderCourse(); }
+function setPost(v){ const c=curCourse(); if(!c) return; c.post=v||null; renderCourse(); }
+function setStop(i, key, v){
+  const c=curCourse(); if(!c) return;
+  if(key==='work') c.stops[i].work = v===''?null:Number(v);
+  else c.stops[i][key]=v;
+  renderCourse();
+}
+function addStop(){
+  const c=curCourse(); if(!c) return;
+  const id=$('cs-add')?.value; if(!id) return;
+  c.stops=[...(c.stops||[]), {custId:Number(id), at:'', work:null}];
+  renderCourse();
+}
+function moveStop(i, d){
+  const c=curCourse(); if(!c) return;
+  const j=i+d; if(j<0 || j>=c.stops.length) return;
+  const t=c.stops[i]; c.stops[i]=c.stops[j]; c.stops[j]=t;
+  renderCourse();
+}
+function delStop(i){ const c=curCourse(); if(!c) return; c.stops.splice(i,1); renderCourse(); }
+// ★ 2026-09-24.6: 地図をクリックして顧客の位置を決める
+let _pickCustId=null;
+function pickOnMap(custId){
+  _pickCustId=custId;
+  const cu=(D.customers||[]).find(x=>String(x.id)===String(custId));
+  alert(`${cu?cu.name:''} の位置を決めます。地図の該当地点をクリックしてください。`);
+}
+async function _onMapClick(e){
+  if(!_pickCustId) return;
+  const cu=(D.customers||[]).find(x=>String(x.id)===String(_pickCustId));
+  _pickCustId=null;
+  if(!cu) return;
+  cu.lat=Number(e.latlng.lat.toFixed(6));
+  cu.lng=Number(e.latlng.lng.toFixed(6));
+  const ok=await fbSet('customers', D.customers);
+  renderCourse();
+  alert(ok?`${cu.name} の位置を設定しました`:'端末には保存しましたが、サーバーへの保存に失敗しました。');
+}
+
+// ── 地図 ──
+function drawMap(c){
+  if(typeof L==='undefined') return;
+  const el=$('cs-map'); if(!el) return;
+  if(!_csMap){
+    _csMap=L.map(el).setView([34.5731,135.4829], 11);
+    L.tileLayer('https://tile.openstreetmap.org/{z}/{x}/{y}.png',
+      {maxZoom:18, attribution:'© OpenStreetMap'}).addTo(_csMap);
+    _csMap.on('click', _onMapClick);
+  }
+  if(_csLayer){ _csMap.removeLayer(_csLayer); _csLayer=null; }
+  if(!c) return;
+  const pts=[];
+  const start=officePos($('sh-off').value||'');
+  const group=[];
+  if(start && start.lat){ pts.push([start.lat,start.lng]);
+    group.push(L.marker([start.lat,start.lng]).bindPopup(`${start.name}（営業所）`)); }
+  (c.stops||[]).forEach((st,i)=>{
+    const p=custPos(st.custId);
+    if(!p || !p.lat) return;
+    pts.push([p.lat,p.lng]);
+    group.push(L.marker([p.lat,p.lng]).bindPopup(`${i+1}. ${p.name}${st.at?'（'+st.at+'）':''}<br>${p.addr||''}`));
+  });
+  if(c.post){
+    const p=officePos(c.post);
+    if(p && p.lat){ pts.push([p.lat,p.lng]); group.push(L.marker([p.lat,p.lng]).bindPopup(`${p.name}（持込）`)); }
+  }
+  if(start && start.lat && pts.length>1) pts.push([start.lat,start.lng]);
+  if(pts.length>1) group.push(L.polyline(pts, {weight:3, opacity:.7}));
+  if(!group.length) return;
+  _csLayer=L.layerGroup(group).addTo(_csMap);
+  try{ _csMap.fitBounds(L.latLngBounds(pts), {padding:[30,30]}); }catch(e){}
+  setTimeout(()=>{ try{ _csMap.invalidateSize(); }catch(e){} }, 100);
+}
+
 function printSheet(){
   const office=$('sh-off').value||'', mon=_ymNorm($('sh-mon').value||'');
   const tbl=$('sh-table'); if(!tbl) return;
@@ -593,6 +1010,11 @@ function printSheet(){
 window.cycle=cycle; window.weekly=weekly; window.save=save; window.printSheet=printSheet;
 window.applyYoy=applyYoy; window.saveForecast=saveForecast;
 window.importSaleCsv=importSaleCsv; window.checkLastYear=checkLastYear;
+window.setView=setView; window.pickOffice=pickOffice; window.renderCourse=renderCourse; window.pickCourse=pickCourse;
+window.newCourse=newCourse; window.delCourse=delCourse; window.saveCourses=saveCourses;
+window.setDepart=setDepart; window.setPost=setPost; window.setStop=setStop;
+window.addStop=addStop; window.moveStop=moveStop; window.delStop=delStop;
+window.saveWeights=saveWeights; window.pickOnMap=pickOnMap;
 
 $('sh-off').addEventListener('change', render);
 $('sh-mon').addEventListener('change', render);
