@@ -93,7 +93,7 @@
 <header>
   <div>
     <h1>大阪急配　シフト表</h1>
-    <div class="ver" id="app-ver">ver 2026-09-24.47</div>
+    <div class="ver" id="app-ver">ver 2026-09-24.48</div>
   </div>
   <div class="row" style="margin-left:auto;">
     <select id="sh-off" class="fi" style="display:none;"></select>
@@ -184,7 +184,7 @@ document.dispatchEvent(new Event('fb-sdk-ready'));
 
 <script>
 'use strict';
-const APP_VER = '2026-09-24.47';
+const APP_VER = '2026-09-24.48';
 console.log('[シフト表] APP_VER', APP_VER);
 
 const FB_CONFIG = {
@@ -1706,7 +1706,7 @@ function renderCourse(selId){
             : st.type==='post'
             ? '<span class="xs muted">郵便局</span>'
             : `<select class="fi" style="width:auto;font-size:11px;padding:3px 4px;" onchange="setStopU('${st.uid}','loc',this.value)">
-            <option value="cust"${(!st.loc||st.loc==='cust')?' selected':''}>集荷先住所</option>
+            <option value="cust"${(!st.loc||st.loc==='cust')?' selected':''}>集荷先住所（顧客の位置）</option>
             <option value="origin"${st.loc==='origin'?' selected':''}>本社ロジ</option>
             <option value="map"${(st.loc&&typeof st.loc==='object')?' selected':''}>地図で指定</option>
           </select>`}</td>
@@ -2001,7 +2001,15 @@ async function _onMapClick(e){
     } else if(st.custId){
       const cu=(D.customers||[]).find(x=>String(x.id)===String(st.custId));
       if(cu){ cu.lat=lat; cu.lng=lng; await savePosOverride('cust:'+cu.id, lat, lng, cu.name); await fbSet('customers', D.customers); }
-      st.loc='cust';
+      // ★ 2026-09-24.48: 同じ顧客の行は、すべてこの位置を使うようにそろえる
+      let same=0;
+      (c.stops||[]).forEach(x=>{
+        if(x.custId && String(x.custId)===String(st.custId) && x.loc!=='origin'){ x.loc='cust'; same++; }
+      });
+      renderCourse();
+      alert(same>1 ? `この顧客の位置を直しました。同じ顧客の ${same}か所すべてに反映しています（次回も記憶されます）`
+                   : 'この立ち寄り先の位置を直しました（次回も記憶されます）');
+      return;
     }
     renderCourse();
     alert('この立ち寄り先の位置を直しました（次回も記憶されます）');
