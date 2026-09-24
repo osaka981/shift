@@ -81,7 +81,7 @@
 <header>
   <div>
     <h1>大阪急配　シフト表</h1>
-    <div class="ver" id="app-ver">ver 2026-09-24.17</div>
+    <div class="ver" id="app-ver">ver 2026-09-24.18</div>
   </div>
   <div class="row" style="margin-left:auto;">
     <select id="sh-off" class="fi" style="display:none;"></select>
@@ -151,7 +151,7 @@ document.dispatchEvent(new Event('fb-sdk-ready'));
 
 <script>
 'use strict';
-const APP_VER = '2026-09-24.17';
+const APP_VER = '2026-09-24.18';
 console.log('[シフト表] APP_VER', APP_VER);
 
 const FB_CONFIG = {
@@ -469,6 +469,32 @@ function fillOffices(){
   render();
 }
 // ★ 2026-09-24.15: 媒体ごとの色
+// ★ 2026-09-24.18: 媒体名がCSVに無い場合は、セール名から推定する
+const MEDIA_RULES=[
+  ['楽天', ['楽天','スーパーSALE','スーパーセール','お買い物マラソン','イーグルス']],
+  ['Amazon', ['Amazon','アマゾン','プライム']],
+  ['Yahoo', ['Yahoo','ヤフー','PayPay','ゾロ目','5のつく日']],
+  ['Qoo10', ['Qoo10','キューテン','メガ割']],
+  ['ヨドバシ', ['ヨドバシ']],
+  ['ZOZO', ['ZOZO','ゾゾ']],
+  ['au PAY', ['au PAY','auPAY','三太郎']],
+];
+function inferMedia(name, media){
+  const m=String(media||'').trim();
+  if(m && m!=='その他') return m;
+  const t=String(name||'');
+  for(const [label, words] of MEDIA_RULES){
+    if(words.some(w=>t.toLowerCase().includes(String(w).toLowerCase()))) return label;
+  }
+  return m || 'その他';
+}
+// セール名から媒体名を取り除いた短い名前
+function shortSaleName(name, media){
+  let t=String(name||'').trim();
+  if(media) t=t.replace(new RegExp('^'+media.replace(/[.*+?^${}()|[\]\\]/g,'\\$&')+'[\\s　]*'),'');
+  return t || name || '';
+}
+
 // ★ 2026-09-24.17: 大型セールは色を強くする
 const BIG_SALE_WORDS=['スーパーセール','感謝祭','ブラックフライデー','メガ割','大感謝','超PayPay','年末年始','クリスマス','お年玉'];
 function isBigSale(name){ return BIG_SALE_WORDS.some(w=>String(name||'').includes(w)); }
@@ -486,8 +512,8 @@ function saleLanes(mon){
     if(isNaN(base)) return;
     const d=new Date(base.getFullYear(), base.getMonth(), base.getDate()+(Number(e.shiftDays)||0));
     if(`${d.getFullYear()}-${String(d.getMonth()+1).padStart(2,'0')}`!==mon) return;
-    const media=e.media||'その他';
-    const name=e.name||'セール';
+    const media=inferMedia(e.name, e.media);
+    const name=shortSaleName(e.name||'セール', media);
     const day=d.getDate();
     const list=(byMedia[media]=byMedia[media]||[]);
     const hit=list.find(x=>x.name===name && (x.to===day-1 || x.from===day+1 || (day>=x.from&&day<=x.to)));
