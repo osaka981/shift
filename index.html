@@ -93,7 +93,7 @@
 <header>
   <div>
     <h1>大阪急配　シフト表</h1>
-    <div class="ver" id="app-ver">ver 2026-09-24.48</div>
+    <div class="ver" id="app-ver">ver 2026-09-24.49</div>
   </div>
   <div class="row" style="margin-left:auto;">
     <select id="sh-off" class="fi" style="display:none;"></select>
@@ -149,6 +149,8 @@
           <select id="cs-sel" class="fi" onchange="renderCourse()"></select>
           <button class="btn gh" onclick="newCourse()">＋コースを追加</button>
           <button class="btn gh" onclick="delCourse()">削除</button>
+          <span class="xs muted">このコースの営業所</span>
+          <select id="cs-office" class="fi" style="width:auto;" onchange="moveCourseOffice(this.value)"></select>
         </div>
         <div class="row xs muted">
           平均速度 <input type="number" id="cs-speed" class="fi" style="width:60px;" value="25" onchange="renderCourse()"> km/h
@@ -184,7 +186,7 @@ document.dispatchEvent(new Event('fb-sdk-ready'));
 
 <script>
 'use strict';
-const APP_VER = '2026-09-24.48';
+const APP_VER = '2026-09-24.49';
 console.log('[シフト表] APP_VER', APP_VER);
 
 const FB_CONFIG = {
@@ -1519,6 +1521,16 @@ async function saveCourses(){
   const ok=await fbSet('col_courses', D.courses||[]);
   alert(ok ? 'コースを保存しました' : `端末には保存しましたが、サーバーへの保存に失敗しました。\n理由：${_lastFbError||'不明'}`);
 }
+// コースを別の営業所へ移す
+async function moveCourseOffice(name){
+  const c=curCourse(); if(!c || !name || c.office===name) return;
+  if(!confirm(`${c.name} を ${name} に移しますか？`)) { renderCourse(); return; }
+  c.office=name;
+  await saveCourses();
+  // 移した先の営業所に切り替えて表示する
+  pickOffice(name);
+  renderCourse(c.id);
+}
 async function newCourse(){
   const name=prompt('コース名（例：都島コース）','');
   if(name===null || !name.trim()) return;
@@ -1651,6 +1663,15 @@ function renderCourse(selId){
     : '<option value="">（コースなし）</option>';
   if(cur && list.some(c=>String(c.id)===cur)) sel.value=cur;
   const c=curCourse();
+  // ★ 2026-09-24.49: コースの所属営業所を選べるようにする
+  {
+    const sel2=$('cs-office');
+    if(sel2){
+      const all=[...new Set([...(D.locations||[]).filter(l=>l&&l.active!==false).map(l=>l.name), ...(c&&c.office?[c.office]:[])])];
+      sel2.innerHTML=all.map(n=>`<option value="${esc(n)}"${c&&c.office===n?' selected':''}>${esc(n)}</option>`).join('');
+      sel2.style.display = c ? '' : 'none';
+    }
+  }
   const root=$('cs-root');
   if(!c){ root.innerHTML='<div class="al al-w">「＋コースを追加」でコースを作ってください。</div>'; drawMap(null); return; }
   ensureUid(c);
@@ -2107,7 +2128,7 @@ window.newCourse=newCourse; window.delCourse=delCourse; window.saveCourses=saveC
 window.setDepart=setDepart; window.setPost=setPost; window.setStop=setStop;
 window.addStop=addStop; window.moveStop=moveStop; window.delStop=delStop;
 window.addPostStop=addPostStop; window.pickPostStopOnMap=pickPostStopOnMap; window.addOriginStop=addOriginStop;
-window.setStopU=setStopU; window.holdStopU=holdStopU; window.moveStopU=moveStopU; window.delStopU=delStopU; window.startFixPos=startFixPos;
+window.moveCourseOffice=moveCourseOffice; window.setStopU=setStopU; window.holdStopU=holdStopU; window.moveStopU=moveStopU; window.delStopU=delStopU; window.startFixPos=startFixPos;
 window.saveWeights=saveWeights; window.pickOnMap=pickOnMap;
 window.csDragStart=csDragStart; window.csDragOver=csDragOver; window.csDrop=csDrop; window.csDragEnd=csDragEnd;
 window.shRowDragStart=shRowDragStart; window.shRowDragOver=shRowDragOver; window.shRowDrop=shRowDrop; window.shRowDragEnd=shRowDragEnd;
