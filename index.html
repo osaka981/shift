@@ -83,7 +83,7 @@
 <header>
   <div>
     <h1>大阪急配　シフト表</h1>
-    <div class="ver" id="app-ver">ver 2026-09-24.25</div>
+    <div class="ver" id="app-ver">ver 2026-09-24.26</div>
   </div>
   <div class="row" style="margin-left:auto;">
     <select id="sh-off" class="fi" style="display:none;"></select>
@@ -155,7 +155,7 @@ document.dispatchEvent(new Event('fb-sdk-ready'));
 
 <script>
 'use strict';
-const APP_VER = '2026-09-24.25';
+const APP_VER = '2026-09-24.26';
 console.log('[シフト表] APP_VER', APP_VER);
 
 const FB_CONFIG = {
@@ -686,7 +686,7 @@ function render(){
       </colgroup>
       <thead>${head}</thead><tbody>${body}</tbody><tfoot>${foot}</tfoot></table></div>
     ${holidayNoteHTML(mon, last)}
-    ${'' /* ★ 2026-09-24.25: セール予定カレンダーは作り直しのため一旦外す */}
+    ${saleListHTML(mon, saleMap)}
     ${colMode?courseSummaryHTML(office, mon, data):''}
     ${weightsHTML(colMode)}
     <div class="row" style="justify-content:flex-end;margin-top:10px;">
@@ -784,86 +784,47 @@ function dayStripHTML(mon, saleMap){
 
 // ★ 2026-09-24.9: その月のセール予定の一覧（媒体名・セール名が分かるように）
 function saleListHTML(mon, saleMap){
-  // ★ 2026-09-24.17: 月間カレンダー（月曜始まり・連続する期間は1本の帯・帯の中に名称）
+  // ★ 2026-09-24.26: フリート管理のカレンダーと同じ作り（7列のグリッド・日ごとに小さな札）
   const [y,m]=mon.split('-').map(Number);
-  const last=new Date(y,m,0).getDate();
-  const lanes=saleLanes(mon);
-  // 期間を平らな一覧にする
-  const evs=[];
-  Object.entries(lanes).forEach(([media, rows])=>{
-    rows.forEach(row=>row.forEach(ev=>evs.push({media, name:ev.name, from:ev.from, to:ev.to})));
+  const first=new Date(y, m-1, 1), lastD=new Date(y, m, 0);
+  const startDow=first.getDay();            // 0=日
+  const last=lastD.getDate();
+  // 反映日ごとのイベント
+  const byDay={};
+  (D.saleEvents||[]).forEach(e=>{
+    if(!e || !e.date) return;
+    const base=new Date(String(e.date).replace(/\//g,'-')+'T00:00:00');
+    if(isNaN(base)) return;
+    const d=new Date(base.getFullYear(), base.getMonth(), base.getDate()+(Number(e.shiftDays)||0));
+    if(`${d.getFullYear()}-${String(d.getMonth()+1).padStart(2,'0')}`!==mon) return;
+    const media=inferMedia(e.name, e.media);
+    (byDay[d.getDate()]=byDay[d.getDate()]||[]).push({media, name:shortSaleName(e.name||'セール', media), big:isBigSale(e.name)});
   });
-  if(!evs.length) return '';
-  const first=new Date(y, m-1, 1);
-  const startPad=first.getDay();                 // ★ 2026-09-24.23: 日曜始まり（Excelの様式に合わせる）
-  const weeks=[];
-  for(let d=1-startPad; d<=last; d+=7) weeks.push(d);
-  const W=['日','月','火','水','木','金','土'];
-  const head=`<tr>${W.map((w,i)=>`<th style="${i===6?'color:#6fa8dc;':i===0?'color:#e06666;':''}width:14.28%;font-size:11px;padding:3px;background:var(--bg3);">${w}</th>`).join('')}</tr>`;
-  // 週ごとの段の数を最大に合わせて、ますの高さを揃える
-  let maxLanes=1;
-  weeks.forEach(ws=>{
-    const wk=evs.filter(e=>e.to>=ws && e.from<=ws+6)
-      .map(e=>({...e, s:Math.max(e.from, ws), t:Math.min(e.to, ws+6)}))
-      .sort((a,b)=>a.s-b.s || (b.t-b.s)-(a.t-a.s));
-    const rows=[];
-    wk.forEach(e=>{ let r=rows.find(r=>r.every(x=>e.s>x.t || e.t<x.s)); if(!r){ r=[]; rows.push(r); } r.push(e); });
-    maxLanes=Math.max(maxLanes, rows.length);
-  });
-  maxLanes=Math.max(maxLanes, 2);
-  const body=weeks.map(ws=>{
-    // 日付の行
-    let dayRow='<tr>';
-    for(let i=0;i<7;i++){
-      const d=ws+i;
-      if(d<1||d>last){ dayRow+='<td style="background:transparent;border-color:transparent;"></td>'; continue; }
-      const iso=`${mon}-${String(d).padStart(2,'0')}`;
-      const hol=holidayName(iso);
-      const dow=new Date(iso+'T00:00:00').getDay();
-      const col=(dow===0||hol)?'color:#e06666;':dow===6?'color:#6fa8dc;':'';
-      const dowBg=(dow===0||hol)?'background:rgba(224,102,102,.10);':dow===6?'background:rgba(111,168,220,.10);':'';
-      dayRow+=`<td style="${col}${dowBg}text-align:left;font-weight:700;font-size:12px;padding:4px 6px;
-        border:1px solid var(--brd);border-bottom:none;">${d}${hol?`<span class="xs"> ${esc(hol)}</span>`:''}</td>`;
-    }
-    dayRow+='</tr>';
-    const spacer=`<tr><td colspan="7" style="height:6px;border:none;background:transparent;padding:0;"></td></tr>`;
-    // その週に掛かる期間を段に積む
-    const wk=evs.filter(e=>e.to>=ws && e.from<=ws+6)
-      .map(e=>({...e, s:Math.max(e.from, ws), t:Math.min(e.to, ws+6)}))
-      .sort((a,b)=>a.s-b.s || (b.t-b.s)-(a.t-a.s));
-    const rows=[];
-    wk.forEach(e=>{
-      let row=rows.find(r=>r.every(x=>e.s>x.t || e.t<x.s));
-      if(!row){ row=[]; rows.push(row); }
-      row.push(e);
-    });
-    const barRows=rows.map(row=>{
-      let tr='<tr>', i=0;
-      while(i<7){
-        const d=ws+i;
-        const ev=row.find(x=>x.s===d);
-        if(ev){
-          const span=ev.t-ev.s+1;
-          const big=isBigSale(ev.name);
-          const col=big?'#d9534f':mediaColor(ev.media);
-          const cont = ev.from<ev.s ? '〜' : '';
-          tr+=`<td colspan="${span}" style="padding:1px 2px;border-color:transparent;background:transparent;">
-            <div title="${esc(ev.media)} ${esc(ev.name)}" style="background:${col};color:#fff;border-radius:9px;
-              font-size:10px;font-weight:${big?'800':'700'};padding:1px 8px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;">
-              ${cont}${esc(ev.media)} ${esc(ev.name)}</div></td>`;
-          i+=span;
-        } else { tr+='<td style="border-left:1px solid var(--brd);border-right:1px solid var(--brd);background:transparent;"></td>'; i++; }
-      }
-      return tr+'</tr>';
-    }).join('');
-    const pad=Array.from({length:Math.max(0, maxLanes-rows.length)},
-      ()=>`<tr>${Array.from({length:7},()=>'<td style="border-left:1px solid var(--brd);border-right:1px solid var(--brd);background:transparent;height:18px;"></td>').join('')}</tr>`).join('');
-    return spacer+dayRow+barRows+pad;
-  }).join('');
-  return `<div style="margin-top:12px;">
-    <div class="xs fw7" style="margin-bottom:4px;">この月のセール予定（★は大型セール）</div>
-    <div class="tw" style="max-height:none;"><table style="table-layout:fixed;">
-      <thead>${head}</thead><tbody>${body}</tbody></table></div>
+  if(!Object.keys(byDay).length) return '';
+  const dow=['日','月','火','水','木','金','土'];
+  let cells=dow.map((w,i)=>`<div style="padding:6px 4px;text-align:center;font-size:11px;font-weight:700;background:var(--bg3);
+    color:${i===0?'#e06666':i===6?'#6fa8dc':'var(--txt2)'};">${w}</div>`).join('');
+  for(let i=0;i<startDow;i++) cells+='<div style="background:var(--bg);min-height:84px;"></div>';
+  for(let d=1; d<=last; d++){
+    const iso=`${mon}-${String(d).padStart(2,'0')}`;
+    const wd=new Date(iso+'T00:00:00').getDay();
+    const hol=holidayName(iso);
+    const evts=byDay[d]||[];
+    const dayCol=(wd===0||hol)?'#e06666':wd===6?'#6fa8dc':'var(--txt)';
+    const chips=evts.slice(0,4).map(e=>{
+      const c=e.big?'#d9534f':mediaColor(e.media);
+      return `<div title="${esc(e.media)} ${esc(e.name)}" style="font-size:9.5px;line-height:1.3;padding:1px 4px;margin-top:2px;
+        border-radius:4px;border-left:3px solid ${c};background:${c}22;color:var(--txt);
+        overflow:hidden;text-overflow:ellipsis;white-space:nowrap;">${esc(e.media)} ${esc(e.name)}</div>`;
+    }).join('') + (evts.length>4?`<div style="font-size:9px;color:var(--txt2);text-align:center;margin-top:1px;">+${evts.length-4}</div>`:'');
+    cells+=`<div style="background:var(--bg2);min-height:84px;padding:4px 5px;overflow:hidden;">
+      <div style="font-size:11.5px;font-weight:700;color:${dayCol};">${d}${hol?`<span class="xs" style="color:#e06666;"> ${esc(hol)}</span>`:''}</div>
+      ${chips}</div>`;
+  }
+  return `<div style="margin-top:14px;">
+    <div class="xs fw7" style="margin-bottom:6px;">${y}年${m}月のセール予定（★は大型セール）</div>
+    <div style="display:grid;grid-template-columns:repeat(7,1fr);gap:1px;background:var(--brd);
+      border:1px solid var(--brd);border-radius:10px;overflow:hidden;">${cells}</div>
   </div>`;
 }
 
