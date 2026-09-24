@@ -48,6 +48,8 @@
   .al-e{background:rgba(217,83,79,.12);border:1px solid rgba(217,83,79,.4);}
   .mono{font-family:var(--mono);}
   /* ★ 2026-09-24.8: スマホ表示 */
+  #sh-table td:first-child, #sh-table th:first-child{overflow:hidden;}
+  #sh-table .cell{overflow:hidden;}
   @media (max-width: 720px){
     header{padding:8px 10px;gap:6px;position:static;}
     h1{font-size:13px;}
@@ -81,7 +83,7 @@
 <header>
   <div>
     <h1>大阪急配　シフト表</h1>
-    <div class="ver" id="app-ver">ver 2026-09-24.18</div>
+    <div class="ver" id="app-ver">ver 2026-09-24.19</div>
   </div>
   <div class="row" style="margin-left:auto;">
     <select id="sh-off" class="fi" style="display:none;"></select>
@@ -151,7 +153,7 @@ document.dispatchEvent(new Event('fb-sdk-ready'));
 
 <script>
 'use strict';
-const APP_VER = '2026-09-24.18';
+const APP_VER = '2026-09-24.19';
 console.log('[シフト表] APP_VER', APP_VER);
 
 const FB_CONFIG = {
@@ -551,7 +553,7 @@ function laneRowsHTML(mon, last){
           tds+=`<th colspan="${span}" title="${esc(media)} ${esc(ev.name)}"
             style="padding:1px 2px;border-color:transparent;background:transparent;">
             <div style="background:${big?'#d9534f':col};color:#fff;font-size:9.5px;font-weight:${big?'800':'700'};
-              white-space:nowrap;overflow:hidden;border-radius:9px;padding:1px 6px;line-height:1.4;
+              white-space:nowrap;overflow:hidden;text-overflow:ellipsis;border-radius:9px;padding:1px 6px;line-height:1.4;
               ${big?'box-shadow:0 0 0 1px rgba(255,255,255,.35) inset;':''}">${esc(media)}${big?'★':''}</div></th>`;
           d+=span;
         } else { tds+=empty; d++; }
@@ -670,7 +672,13 @@ function render(){
       ${hiddenOf(office).length?`<button class="btn gh" style="padding:2px 8px;font-size:11px;" onclick="toggleShowHidden()">${_showHidden?'非表示の人を隠す':`非表示の ${hiddenOf(office).length}名 を表示`}</button>`:''}
     </div>
     <div class="xs muted" id="sh-scroll-hint" style="margin-bottom:4px;display:none;">表は横にスクロールできます。氏名の列は固定されます。</div>
-    <div class="tw"><table id="sh-table"><thead>${head}</thead><tbody>${body}</tbody><tfoot>${foot}</tfoot></table></div>
+    <div class="tw"><table id="sh-table" style="table-layout:fixed;width:max-content;">
+      <colgroup>
+        <col style="width:120px;">
+        ${Array.from({length:last},()=>'<col style="width:28px;">').join('')}
+        <col style="width:34px;"><col style="width:56px;">
+      </colgroup>
+      <thead>${head}</thead><tbody>${body}</tbody><tfoot>${foot}</tfoot></table></div>
     ${holidayNoteHTML(mon, last)}
     ${saleListHTML(mon, saleMap)}
     ${colMode?courseSummaryHTML(office, mon, data):''}
@@ -818,7 +826,7 @@ function saleListHTML(mon, saleMap){
           const cont = ev.from<ev.s ? '〜' : '';
           tr+=`<td colspan="${span}" style="padding:1px 2px;border-color:transparent;background:transparent;">
             <div title="${esc(ev.media)} ${esc(ev.name)}" style="background:${col};color:#fff;border-radius:9px;
-              font-size:10px;font-weight:${big?'800':'700'};padding:1px 8px;white-space:nowrap;overflow:hidden;">
+              font-size:10px;font-weight:${big?'800':'700'};padding:1px 8px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;">
               ${cont}${esc(ev.media)} ${esc(ev.name)}</div></td>`;
           i+=span;
         } else { tr+='<td style="border-color:transparent;background:transparent;"></td>'; i++; }
