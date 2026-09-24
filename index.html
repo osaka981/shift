@@ -81,7 +81,7 @@
 <header>
   <div>
     <h1>大阪急配　シフト表</h1>
-    <div class="ver" id="app-ver">ver 2026-09-24.10</div>
+    <div class="ver" id="app-ver">ver 2026-09-24.11</div>
   </div>
   <div class="row" style="margin-left:auto;">
     <select id="sh-off" class="fi" style="display:none;"></select>
@@ -151,7 +151,7 @@ document.dispatchEvent(new Event('fb-sdk-ready'));
 
 <script>
 'use strict';
-const APP_VER = '2026-09-24.10';
+const APP_VER = '2026-09-24.11';
 console.log('[シフト表] APP_VER', APP_VER);
 
 const FB_CONFIG = {
@@ -230,12 +230,13 @@ async function initFirebase(){
   }, err=>console.warn('[shift_settings]', err && err.message));
   setState('接続済み', true);
 }
+let _lastFbError='';
 async function fbSet(node, value){
   lsSet('nikki_'+node, value);
-  if(!fbDB) return false;
+  if(!fbDB){ _lastFbError='サーバーに接続していません'; return false; }
   const { ref, set } = window._fbImports;
-  try{ await set(ref(fbDB, 'nikki/'+node), value); return true; }
-  catch(e){ console.warn('保存に失敗', e); return false; }
+  try{ await set(ref(fbDB, 'nikki/'+node), value); _lastFbError=''; return true; }
+  catch(e){ _lastFbError=(e&&e.message)||String(e); console.warn('保存に失敗', node, e); return false; }
 }
 
 // ══ シフト表 ══
@@ -819,6 +820,15 @@ async function saveForecast(){
 //   コースは人と切り離した箱。立ち寄り順・指定時刻・郵便局持込を持ち、
 //   直線距離×1.3を道のりの目安として所要時間を積み上げる。
 // ══════════════════════════════════════════════════
+// ★ 2026-09-24.11: 出発地点の既定（本社）。営業所に位置が無いときはここから計算する
+const DEFAULT_ORIGIN = {name:'本社（堺市北区常磐町3-12-5）', addr:'堺市北区常磐町3-12-5', lat:34.5566, lng:135.4970};
+function originOf(office){
+  const o=officePos(office);
+  if(o && o.lat) return o;
+  const saved=D.settings?.origin;
+  if(saved && saved.lat) return {name:saved.name||DEFAULT_ORIGIN.name, lat:saved.lat, lng:saved.lng, addr:saved.addr||''};
+  return {...DEFAULT_ORIGIN};
+}
 let _view='shift';
 let _csMap=null, _csLayer=null;
 function setView(v){
@@ -855,7 +865,7 @@ function curCourse(){
 }
 async function saveCourses(){
   const ok=await fbSet('col_courses', D.courses||[]);
-  if(!ok) alert('端末には保存しましたが、サーバーへの保存に失敗しました。');
+  alert(ok ? 'コースを保存しました' : `端末には保存しましたが、サーバーへの保存に失敗しました。\n理由：${_lastFbError||'不明'}`);
 }
 async function newCourse(){
   const name=prompt('コース名（例：都島コース）','');
@@ -899,7 +909,7 @@ function calcCourse(c){
   const speed=Number($('cs-speed')?.value)||25;
   const workDef=Number($('cs-work')?.value)||10;
   const postWork=Number($('cs-post-work')?.value)||20;
-  const start=officePos($('sh-off').value||'') || null;
+  const start=originOf($('sh-off').value||'');
   let t=hm2min(c.depart||'10:00');
   let prev=start, km=0;
   const rows=[];
@@ -952,25 +962,29 @@ function renderCourse(selId){
   if(!c){ root.innerHTML='<div class="al al-w">「＋コースを追加」でコースを作ってください。</div>'; drawMap(null); return; }
   const r=calcCourse(c);
   // ★ 2026-09-24.7: 営業所の位置が無いと、1件目までの移動が0分になる
-  const startPos=officePos($('sh-off').value||'');
-  const startWarn = (!startPos || !startPos.lat)
-    ? `<div class="al al-e" style="margin-bottom:8px;">${esc($('sh-off').value||'営業所')}の位置が未設定です。営業所から1件目までの移動時間が0分で計算されています。経営管理の郵便局一覧でこの営業所を開き、所在地から位置を取得してください。</div>` : '';
+  const startPos=originOf($('sh-off').value||'');
+  const usingDefault = !(officePos($('sh-off').value||'')||{}).lat;
+  const startWarn = usingDefault
+    ? `<div class="al al-w" style="margin-bottom:8px;">出発地点は <b>${esc(startPos.addr||startPos.name)}</b> で計算しています。営業所から出る場合は、経営管理の郵便局一覧でその営業所の位置を登録してください。</div>` : '';
   const opts=(D.customers||[]).slice().sort((a,b)=>String(a.custNo||'').localeCompare(String(b.custNo||'')))
     .map(x=>`<option value="${x.id}">${esc(x.custNo||'')} ${esc(x.name)}</option>`).join('');
-  const offOpts=(D.offices||[]).map(o=>`<option value="${esc(o.name)}"${c.post===o.name?' selected':''}>${esc(o.name)}</option>`).join('');
+  const POST_DEFAULTS=['都島郵便局','大阪城東郵便局','大阪南郵便局','東淀川郵便局','西淀川郵便局','大阪北郵便局',
+    '大阪西郵便局','大阪東郵便局','平野郵便局','大阪港郵便局','枚方郵便局','摂津郵便局','茨木郵便局','宇治郵便局'];
+  const postNames=[...new Set([...(D.offices||[]).map(o=>o.name), ...POST_DEFAULTS])].filter(Boolean).sort();
+  const offOpts=postNames.map(n=>`<option value="${esc(n)}"></option>`).join('');
   root.innerHTML=startWarn+`
     <div class="row" style="margin-bottom:8px;">
       <span class="xs muted">出勤（出発）</span>
       <input type="time" id="cs-depart" class="fi" value="${esc(c.depart||'10:00')}" onchange="setDepart(this.value)">
       <span class="xs muted">郵便局持込</span>
-      <select id="cs-post" class="fi" onchange="setPost(this.value)">
-        <option value="">なし（店入れのみ）</option>${offOpts}
-      </select>
+      <input type="text" id="cs-post" class="fi" list="cs-post-list" style="width:180px;"
+        value="${esc(c.post||'')}" placeholder="なし（店入れのみ）" onchange="setPost(this.value)">
+      <datalist id="cs-post-list">${offOpts}</datalist>
       <span class="xs muted">所要 <b>${Math.floor(r.totalMin/60)}時間${String(r.totalMin%60).padStart(2,'0')}分</b>　終了 <b>${min2hm(r.endMin)}</b>　走行 約${r.km.toFixed(1)}km</span>
     </div>
     <div class="tw" style="max-height:none;"><table>
       <thead><tr><th>順</th><th>立ち寄り先</th><th>指定</th><th>到着</th><th>出発</th><th>移動</th><th>待ち</th><th>作業</th><th>距離</th><th></th></tr></thead>
-      <tbody>
+      <tbody id="cs-tbody">
         <tr style="background:var(--bg3);">
           <td></td><td style="text-align:left;">${esc(startPos?startPos.name:'営業所')}（出発）</td><td></td>
           <td class="mono">${esc(c.depart||'')}</td><td class="mono">${esc(c.depart||'')}</td>
@@ -978,8 +992,10 @@ function renderCourse(selId){
         </tr>
         ${(c.stops||[]).map((st,i)=>{
         const row=r.rows[i]||{};
-        return `<tr>
-          <td>${i+1}</td>
+        return `<tr draggable="true" data-i="${i}"
+            ondragstart="csDragStart(event,${i})" ondragover="csDragOver(event)" ondrop="csDrop(event,${i})" ondragend="csDragEnd(event)"
+            style="cursor:grab;">
+          <td title="ドラッグで並べ替え">⠿ ${i+1}</td>
           <td style="text-align:left;">${esc(row.name||'')}${row.noPos?'<span class="xs" style="color:#e06666;">（位置未設定）</span>':''}</td>
           <td><input type="time" class="fi" style="width:96px;" value="${esc(st.at||'')}" onchange="setStop(${i},'at',this.value)"></td>
           <td class="mono">${esc(row.arrive||'')}</td>
@@ -1023,6 +1039,23 @@ function addStop(){
   c.stops=[...(c.stops||[]), {custId:Number(id), at:'', work:null}];
   renderCourse();
 }
+// ★ 2026-09-24.11: ドラッグで立ち寄り順を入れ替える
+let _csDragFrom=null;
+function csDragStart(e, i){ _csDragFrom=i; try{ e.dataTransfer.effectAllowed='move'; e.dataTransfer.setData('text/plain', String(i)); }catch(_){} }
+function csDragOver(e){ e.preventDefault(); try{ e.dataTransfer.dropEffect='move'; }catch(_){}
+  const tr=e.currentTarget; if(tr && tr.style) tr.style.outline='2px solid var(--accent)'; }
+function csDragEnd(e){ document.querySelectorAll('#cs-tbody tr').forEach(tr=>tr.style.outline=''); _csDragFrom=null; }
+function csDrop(e, to){
+  e.preventDefault();
+  document.querySelectorAll('#cs-tbody tr').forEach(tr=>tr.style.outline='');
+  const from = _csDragFrom!=null ? _csDragFrom : Number(e.dataTransfer?.getData('text/plain'));
+  _csDragFrom=null;
+  const c=curCourse();
+  if(!c || from==null || isNaN(from) || from===to) return;
+  const item=c.stops.splice(from,1)[0];
+  c.stops.splice(to,0,item);
+  renderCourse();
+}
 function moveStop(i, d){
   const c=curCourse(); if(!c) return;
   const j=i+d; if(j<0 || j>=c.stops.length) return;
@@ -1062,7 +1095,7 @@ function drawMap(c){
   if(_csLayer){ _csMap.removeLayer(_csLayer); _csLayer=null; }
   if(!c) return;
   const pts=[];
-  const start=officePos($('sh-off').value||'');
+  const start=originOf($('sh-off').value||'');
   const group=[];
   if(start && start.lat){ pts.push([start.lat,start.lng]);
     group.push(L.marker([start.lat,start.lng]).bindPopup(`${start.name}（営業所）`)); }
@@ -1109,6 +1142,7 @@ window.newCourse=newCourse; window.delCourse=delCourse; window.saveCourses=saveC
 window.setDepart=setDepart; window.setPost=setPost; window.setStop=setStop;
 window.addStop=addStop; window.moveStop=moveStop; window.delStop=delStop;
 window.saveWeights=saveWeights; window.pickOnMap=pickOnMap;
+window.csDragStart=csDragStart; window.csDragOver=csDragOver; window.csDrop=csDrop; window.csDragEnd=csDragEnd;
 
 $('sh-off').addEventListener('change', render);
 $('sh-mon').addEventListener('change', render);
