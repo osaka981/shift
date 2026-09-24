@@ -83,7 +83,7 @@
 <header>
   <div>
     <h1>大阪急配　シフト表</h1>
-    <div class="ver" id="app-ver">ver 2026-09-24.22</div>
+    <div class="ver" id="app-ver">ver 2026-09-24.23</div>
   </div>
   <div class="row" style="margin-left:auto;">
     <select id="sh-off" class="fi" style="display:none;"></select>
@@ -155,7 +155,7 @@ document.dispatchEvent(new Event('fb-sdk-ready'));
 
 <script>
 'use strict';
-const APP_VER = '2026-09-24.22';
+const APP_VER = '2026-09-24.23';
 console.log('[シフト表] APP_VER', APP_VER);
 
 const FB_CONFIG = {
@@ -603,7 +603,7 @@ function render(){
     const dow=new Date(iso+'T00:00:00').getDay();
     const hol=holidayName(iso);
     const col=(dow===0||hol)?'color:#e06666;':dow===6?'color:#6fa8dc;':'';
-    head+=`<th title="${esc(hol)}" style="${col}${colBg[d]}min-width:26px;">${d}<div class="xs" style="${col}">${W[dow]}</div></th>`;
+    head+=`<th title="${esc(hol)}" style="${col}${colBg[d]}overflow:hidden;">${d}<div class="xs" style="${col}">${W[dow]}</div></th>`;
   }
   head+='<th>休</th><th class="num">平均持出</th></tr>';
   let body='';
@@ -676,7 +676,7 @@ function render(){
     ${total?`<div class="xs muted" style="margin-bottom:6px;">予測は月合計 ${total.toLocaleString()}個を曜日係数で配分しています${dw.hasData?'（直近6か月の実績から算出）':'（実績が足りないため全曜日を同じ比率にしています）'}。赤字は人手不足、青字は余力です。</div>`:''}
     ${colMode?'<div class="xs muted" style="margin-bottom:6px;">ますをタップすると、その日に回るコースを選べます。コースは「集荷コース」で作ります。</div>':''}
     <div class="xs muted" id="sh-scroll-hint" style="margin-bottom:4px;display:none;">表は横にスクロールできます。氏名の列は固定されます。</div>
-    <div class="tw"><table id="sh-table" style="table-layout:fixed;width:max-content;">
+    <div class="tw"><table id="sh-table" style="table-layout:fixed;width:${120+40+64+last*window._shColW}px;">
       <colgroup>
         <col style="width:120px;">
         ${Array.from({length:last},()=>`<col style="width:${window._shColW}px;">`).join('')}
@@ -793,11 +793,11 @@ function saleListHTML(mon, saleMap){
   });
   if(!evs.length) return '';
   const first=new Date(y, m-1, 1);
-  const startPad=(first.getDay()+6)%7;           // 月曜始まり
+  const startPad=first.getDay();                 // ★ 2026-09-24.23: 日曜始まり（Excelの様式に合わせる）
   const weeks=[];
   for(let d=1-startPad; d<=last; d+=7) weeks.push(d);
-  const W=['月','火','水','木','金','土','日'];
-  const head=`<tr>${W.map((w,i)=>`<th style="${i===5?'color:#6fa8dc;':i===6?'color:#e06666;':''}width:14.2%;font-size:10px;padding:2px;">${w}</th>`).join('')}</tr>`;
+  const W=['日','月','火','水','木','金','土'];
+  const head=`<tr>${W.map((w,i)=>`<th style="${i===6?'color:#6fa8dc;':i===0?'color:#e06666;':''}width:14.28%;font-size:11px;padding:3px;background:var(--bg3);">${w}</th>`).join('')}</tr>`;
   // 週ごとの段の数を最大に合わせて、ますの高さを揃える
   let maxLanes=1;
   weeks.forEach(ws=>{
@@ -808,6 +808,7 @@ function saleListHTML(mon, saleMap){
     wk.forEach(e=>{ let r=rows.find(r=>r.every(x=>e.s>x.t || e.t<x.s)); if(!r){ r=[]; rows.push(r); } r.push(e); });
     maxLanes=Math.max(maxLanes, rows.length);
   });
+  maxLanes=Math.max(maxLanes, 2);
   const body=weeks.map(ws=>{
     // 日付の行
     let dayRow='<tr>';
