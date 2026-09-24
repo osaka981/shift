@@ -52,6 +52,7 @@
   @media print{ th,td{border:1px solid #999 !important;} }
   tfoot td{background:var(--bg3);font-weight:700;}
   .cell{cursor:pointer;user-select:none;}
+  .cell:focus{outline:2px solid var(--accent);outline-offset:-2px;}
   .al{border-radius:6px;padding:10px 12px;font-size:12px;margin-bottom:10px;}
   .al-w{background:rgba(224,139,31,.12);border:1px solid rgba(224,139,31,.4);}
   .al-e{background:rgba(217,83,79,.12);border:1px solid rgba(217,83,79,.4);}
@@ -92,7 +93,7 @@
 <header>
   <div>
     <h1>大阪急配　シフト表</h1>
-    <div class="ver" id="app-ver">ver 2026-09-24.30</div>
+    <div class="ver" id="app-ver">ver 2026-09-24.31</div>
   </div>
   <div class="row" style="margin-left:auto;">
     <select id="sh-off" class="fi" style="display:none;"></select>
@@ -166,7 +167,7 @@ document.dispatchEvent(new Event('fb-sdk-ready'));
 
 <script>
 'use strict';
-const APP_VER = '2026-09-24.30';
+const APP_VER = '2026-09-24.31';
 console.log('[シフト表] APP_VER', APP_VER);
 
 const FB_CONFIG = {
@@ -630,7 +631,9 @@ function render(){
       const key=cellKeyOf(st, d);
       const v=cellGet(data.cells, st, d);
       if(v==='×') off++;
-      tds+=`<td class="cell" data-k="${key}" data-v="${v}" data-bg="${colBg[d]}" onclick="${colMode?`pickCourse(this)`:`cycle(this)`}" style="${colBg[d]}${cellStyle(v)}">${cellLabel(office, v)}</td>`;
+      tds+=`<td class="cell" tabindex="0" data-k="${key}" data-d="${d}" data-v="${v}" data-bg="${colBg[d]}"
+        onclick="${colMode?`pickCourse(this)`:`cycle(this)`}" onkeydown="cellKey(event,this)"
+        style="${colBg[d]}${cellStyle(v)}">${cellLabel(office, v)}</td>`;
     }
     const _k=staffKey(st);
     const _isHid=hiddenOf(office).includes(_k);
@@ -933,17 +936,62 @@ function pickCourse(td){
   const office=$('sh-off').value||'';
   const list=(D.courses||[]).filter(c=>!c.office || c.office===office);
   if(!list.length){ alert('コースがありません。「集荷コース」で作ってください。'); return; }
-  const cur=td.dataset.v||'';
-  const menu=['（空にする）','休み（×）',...list.map(c=>c.name)];
-  const pick=prompt(`この日の担当を選んでください（番号）\n`+menu.map((m,i)=>`${i}: ${m}`).join('\n'), '0');
-  if(pick===null) return;
-  const i=Number(pick);
-  if(!Number.isInteger(i) || i<0 || i>=menu.length) return;
-  const v = i===0 ? '' : i===1 ? '×' : 'C:'+list[i-2].id;
-  td.dataset.v=v;
-  td.innerHTML=cellLabel(office, v);
-  td.setAttribute('style', (td.dataset.bg||'')+cellStyle(v));
-  markDirty(); recalc();
+  const items=[{value:'',label:'（空にする）'},{value:'×',label:'休み（×）'},
+    ...list.map(c=>({value:'C:'+c.id, label:c.name}))];
+  openPickMenu(td, items, v=>{
+    td.dataset.v=v;
+    td.innerHTML=cellLabel(office, v);
+    td.setAttribute('style', (td.dataset.bg||'')+cellStyle(v));
+    markDirty(); recalc();
+  });
+}
+// ★ 2026-09-24.31: 矢印キーとEnterでますを移動、リストは矢印キーで選ぶ
+function cellKey(e, td){
+  const cells=[...document.querySelectorAll('#sh-table .cell')];
+  const cols=Number(td.closest('table').querySelectorAll('thead tr:last-child th').length)-3;
+  const i=cells.indexOf(td);
+  const move=n=>{ const t=cells[i+n]; if(t){ t.focus(); e.preventDefault(); } };
+  switch(e.key){
+    case 'ArrowRight': case 'Enter': move(1); break;
+    case 'ArrowLeft': move(-1); break;
+    case 'ArrowDown': move(cols); break;
+    case 'ArrowUp': move(-cols); break;
+    case ' ': e.preventDefault(); td.click(); break;
+    default: return;
+  }
+}
+// ますの上に出す選択リスト（矢印キーで選ぶ）
+function openPickMenu(td, items, onPick){
+  document.querySelectorAll('.pick-menu').forEach(el=>el.remove());
+  const r=td.getBoundingClientRect();
+  const box=document.createElement('div');
+  box.className='pick-menu';
+  box.style.cssText=`position:fixed;left:${Math.min(r.left, window.innerWidth-220)}px;top:${Math.min(r.bottom+2, window.innerHeight-40)}px;
+    background:var(--bg2);border:1px solid var(--brd2);border-radius:8px;box-shadow:0 6px 20px rgba(0,0,0,.35);
+    z-index:99;min-width:200px;max-height:60vh;overflow:auto;padding:4px;`;
+  let idx=0;
+  const draw=()=>{
+    box.innerHTML=items.map((it,i)=>`<div data-i="${i}" style="padding:7px 10px;border-radius:6px;font-size:13px;cursor:pointer;
+      ${i===idx?'background:var(--accent);color:#fff;font-weight:700;':''}">${esc(it.label)}</div>`).join('');
+  };
+  draw();
+  box.addEventListener('mousedown', ev=>{
+    const el=ev.target.closest('[data-i]'); if(!el) return;
+    ev.preventDefault(); close(); onPick(items[Number(el.dataset.i)].value);
+  });
+  const key=ev=>{
+    if(ev.key==='ArrowDown'){ idx=(idx+1)%items.length; draw(); ev.preventDefault(); }
+    else if(ev.key==='ArrowUp'){ idx=(idx-1+items.length)%items.length; draw(); ev.preventDefault(); }
+    else if(ev.key==='Enter'){ ev.preventDefault(); const v=items[idx].value; close(); onPick(v); }
+    else if(ev.key==='Escape'){ close(); }
+  };
+  function close(){ document.removeEventListener('keydown', key, true); box.remove(); td.focus(); }
+  document.addEventListener('keydown', key, true);
+  document.body.appendChild(box);
+  setTimeout(()=>{
+    const off=ev=>{ if(!box.contains(ev.target)){ close(); document.removeEventListener('mousedown', off, true); } };
+    document.addEventListener('mousedown', off, true);
+  }, 0);
 }
 function cycle(td){
   const cur=td.dataset.v||'';
@@ -951,12 +999,12 @@ function cycle(td){
   if(cur===''){ next='〇'; }
   else if(cur==='〇'){ next='×'; }
   else {
-    const menu=SHIFT_PICK.map(([v,l],i)=>`${i}: ${l}`).join('\n');
-    const pick=prompt('便の指定を選んでください（番号）\n'+menu, '0');
-    if(pick===null) return;
-    const i2=Number(pick);
-    if(!Number.isInteger(i2) || i2<0 || i2>=SHIFT_PICK.length) return;
-    next=SHIFT_PICK[i2][0];
+    openPickMenu(td, SHIFT_PICK.map(([v,l])=>({value:v, label:l})), v=>{
+      td.dataset.v=v; td.textContent=SHIFT_LABEL[v]||'';
+      td.setAttribute('style', (td.dataset.bg||'')+cellStyle(v));
+      markDirty(); recalc();
+    });
+    return;
   }
   td.dataset.v=next; td.textContent=SHIFT_LABEL[next]||'';
   td.setAttribute('style', (td.dataset.bg||'')+cellStyle(next));
@@ -1522,7 +1570,7 @@ window.saveWeights=saveWeights; window.pickOnMap=pickOnMap;
 window.csDragStart=csDragStart; window.csDragOver=csDragOver; window.csDrop=csDrop; window.csDragEnd=csDragEnd;
 window.shRowDragStart=shRowDragStart; window.shRowDragOver=shRowDragOver; window.shRowDrop=shRowDrop; window.shRowDragEnd=shRowDragEnd;
 window.hideStaff=hideStaff; window.showStaff=showStaff; window.toggleShowHidden=toggleShowHidden;
-window.saleBarsHTML=saleBarsHTML; window.showHelp=showHelp; window.setTheme=setTheme; window.fillAll=fillAll; window.fillRow=fillRow;
+window.saleBarsHTML=saleBarsHTML; window.showHelp=showHelp; window.setTheme=setTheme; window.cellKey=cellKey; window.fillAll=fillAll; window.fillRow=fillRow;
 
 $('sh-off').addEventListener('change', ()=>{ if(confirmLeave()){ clearDirty(); render(); } });
 $('sh-mon').addEventListener('change', ()=>{ if(confirmLeave()){ clearDirty(); render(); } });
