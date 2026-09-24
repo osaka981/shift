@@ -10,12 +10,16 @@
     --txt:#e8edf4; --txt2:#97a3b4; --accent:#2f80ed; --grn:#009c5a; --amb:#e08b1f; --red:#d9534f;
     --mono:'DM Mono',ui-monospace,Menlo,Consolas,monospace;
   }
-  :root:not([data-theme="dark"]){ }
+  /* ★ 2026-09-24.30: ヘッダーの「黒」「白」で切り替え。未設定なら端末の設定に合わせる */
   @media (prefers-color-scheme: light){
     :root:not([data-theme="dark"]){
       --bg:#f4f6f9; --bg2:#fff; --bg3:#eef1f6; --brd:#d8dee8; --brd2:#c3ccd9;
       --txt:#1b2430; --txt2:#5d6b7d;
     }
+  }
+  :root[data-theme="light"]{
+    --bg:#f4f6f9; --bg2:#fff; --bg3:#eef1f6; --brd:#d8dee8; --brd2:#c3ccd9;
+    --txt:#1b2430; --txt2:#5d6b7d;
   }
   *{box-sizing:border-box;}
   html,body{margin:0;padding:0;background:var(--bg);color:var(--txt);
@@ -88,7 +92,7 @@
 <header>
   <div>
     <h1>大阪急配　シフト表</h1>
-    <div class="ver" id="app-ver">ver 2026-09-24.28</div>
+    <div class="ver" id="app-ver">ver 2026-09-24.30</div>
   </div>
   <div class="row" style="margin-left:auto;">
     <select id="sh-off" class="fi" style="display:none;"></select>
@@ -100,6 +104,8 @@
     <button class="btn" id="vt-shift" onclick="setView('shift')">シフト表</button>
     <button class="btn gh" id="vt-course" onclick="setView('course')">集荷コース</button>
     <span id="hdr-extra" class="row" style="gap:6px;margin-left:auto;"></span>
+    <button class="btn gh" id="th-dark" title="背景を黒に" onclick="setTheme('dark')">黒</button>
+    <button class="btn gh" id="th-light" title="背景を白に" onclick="setTheme('light')">白</button>
     <button class="btn gh" title="使い方" onclick="showHelp()">？</button>
   </div>
 </header>
@@ -160,7 +166,7 @@ document.dispatchEvent(new Event('fb-sdk-ready'));
 
 <script>
 'use strict';
-const APP_VER = '2026-09-24.28';
+const APP_VER = '2026-09-24.30';
 console.log('[シフト表] APP_VER', APP_VER);
 
 const FB_CONFIG = {
@@ -605,7 +611,9 @@ function render(){
     const hol=holidayName(iso);
     colBg[d] = (dow===0||hol) ? 'background:rgba(224,102,102,.10);' : dow===6 ? 'background:rgba(111,168,220,.10);' : '';
   }
-  let head=laneRowsHTML(mon, last)+'<tr><th>氏名</th>';
+  // ★ 2026-09-24.29: 氏名の欄に選択中の月を出す
+  let head=laneRowsHTML(mon, last)
+    +`<tr><th style="line-height:1.35;"><div style="font-size:12px;color:var(--accent);font-weight:800;">${m}月</div><div>氏名</div></th>`;
   for(let d=1; d<=last; d++){
     const iso=`${mon}-${String(d).padStart(2,'0')}`;
     const dow=new Date(iso+'T00:00:00').getDay();
@@ -696,7 +704,8 @@ function render(){
     ${colMode?courseSummaryHTML(office, mon, data):''}
     ${weightsHTML(colMode)}
     <div class="row" style="justify-content:flex-end;margin-top:10px;">
-      <span class="xs muted" style="margin-right:auto;">${data.updatedAt?`最終更新 ${new Date(data.updatedAt).toLocaleString('ja-JP')}`:'未保存'}</span>
+      <span class="xs muted" style="margin-right:auto;">${data.updatedAt?`最終更新 ${new Date(data.updatedAt).toLocaleString('ja-JP')}`:'未保存'}
+        <span id="sh-dirty" style="color:var(--amb);font-weight:700;margin-left:8px;">${_dirty?'未保存の入力があります':''}</span></span>
       ${colMode?'':'<button class="btn gh" onclick="fillAll(\'〇\')">全員すべて〇</button>'}
       <button class="btn gh" onclick="fillAll('')">全員すべて削除</button>
       <button class="btn gh" onclick="weekly()">曜日で一括設定</button>
@@ -914,7 +923,7 @@ function holidayNoteHTML(mon, last){
   return `<div class="xs" style="margin-top:8px;color:#e06666;">祝日：${items.map(esc).join('　')}</div>`;
 }
 function cellStyle(v){
-  if(v==='×') return 'box-shadow:inset 0 0 0 99px rgba(128,128,128,.16);';
+  if(v==='×') return 'box-shadow:inset 0 0 0 99px rgba(217,83,79,.14);color:#d9534f;font-weight:800;';
   if(String(v).startsWith('C:')) return 'box-shadow:inset 0 0 0 99px rgba(47,128,237,.16);font-size:10px;';
   if(v && v!=='〇') return 'box-shadow:inset 0 0 0 99px rgba(224,139,31,.16);';
   return '';
@@ -934,7 +943,7 @@ function pickCourse(td){
   td.dataset.v=v;
   td.innerHTML=cellLabel(office, v);
   td.setAttribute('style', (td.dataset.bg||'')+cellStyle(v));
-  recalc();
+  markDirty(); recalc();
 }
 function cycle(td){
   const cur=td.dataset.v||'';
@@ -951,7 +960,7 @@ function cycle(td){
   }
   td.dataset.v=next; td.textContent=SHIFT_LABEL[next]||'';
   td.setAttribute('style', (td.dataset.bg||'')+cellStyle(next));
-  recalc();
+  markDirty(); recalc();
 }
 function recalc(){
   const wgt=weights();
@@ -976,12 +985,14 @@ function _applyCell(td, v){
   td.setAttribute('style', (td.dataset.bg||'')+cellStyle(v));
 }
 function fillAll(v){
+  markDirty();
   const label = v==='〇' ? '全員のすべての日を〇にします。' : '全員のすべての日を空にします。';
   if(!confirm(`${label}\nよろしいですか？（保存するまで元に戻せます）`)) return;
   document.querySelectorAll('#sh-table .cell').forEach(td=>_applyCell(td, v));
   recalc();
 }
 function fillRow(key, v){
+  markDirty();
   const tr=[...document.querySelectorAll('#sh-table tbody tr')]
     .find(t=>t.querySelector(`.cell[data-k^="${key}|"]`));
   if(!tr) return;
@@ -1010,6 +1021,7 @@ function weekly(){
       if(!dows.includes(dow)) return;
       td.dataset.v=c; td.textContent=SHIFT_LABEL[c]||'';
       td.setAttribute('style', (td.dataset.bg||'')+cellStyle(c));
+      markDirty();
     });
   });
   recalc();
@@ -1025,6 +1037,7 @@ async function save(){
   all[shKey(office,mon)]={office, mon, cells, updatedAt:new Date().toISOString()};
   D.shifts=all;
   const ok=await fbSet('shifts', all);
+  clearDirty();
   render();
   alert(ok ? `${office} ${mon} のシフトを保存しました` : '端末には保存しましたが、サーバーへの保存に失敗しました。通信を確認してください。');
 }
@@ -1169,6 +1182,27 @@ function originOf(office){
 }
 let _view='shift';
 let _csMap=null, _csLayer=null;
+function setTheme(t){
+  document.documentElement.setAttribute('data-theme', t);
+  try{ localStorage.setItem('shift_theme', t); }catch(e){}
+  const d=$('th-dark'), l=$('th-light');
+  if(d) d.className = t==='dark' ? 'btn' : 'btn gh';
+  if(l) l.className = t==='light' ? 'btn' : 'btn gh';
+}
+function initTheme(){
+  let t=null;
+  try{ t=localStorage.getItem('shift_theme'); }catch(e){}
+  if(t) setTheme(t);
+}
+// ★ 2026-09-24.30: 保存していない入力を守る
+let _dirty=false;
+function markDirty(){ _dirty=true; const el=$('sh-dirty'); if(el) el.textContent='未保存の入力があります'; }
+function clearDirty(){ _dirty=false; const el=$('sh-dirty'); if(el) el.textContent=''; }
+function confirmLeave(){
+  if(!_dirty) return true;
+  return confirm('保存していない入力があります。\nこのまま移動すると入力は消えます。よろしいですか？');
+}
+window.addEventListener('beforeunload', e=>{ if(_dirty){ e.preventDefault(); e.returnValue=''; } });
 function showHelp(){
   alert('ますの入力\n・1回目のタップ → 〇（終日）\n・2回目 → ×（休み）\n・3回目 → 便の指定をリストから選ぶ（①②③のみ／〜①〜②／②〜）\n\n人数の数え方\n終日1・〜②0.6・②〜0.6・①②③0.3（重みは表の下で変えられます）\n\n氏名は左の⠿をドラッグすると並べ替えできます。');
 }
@@ -1190,6 +1224,8 @@ function renderOffTabs(){
   box.innerHTML = all.map(n=>`<button class="btn ${n===cur?'':'gh'}" onclick="pickOffice('${esc(n).replace(/'/g,"\\'")}')">${esc(n)}</button>`).join('');
 }
 function pickOffice(name){
+  if(!confirmLeave()) return;
+  clearDirty();
   const sel=$('sh-off');
   if(sel && ![...sel.options].some(o=>o.value===name)){
     const op=document.createElement('option'); op.value=name; op.textContent=name; sel.appendChild(op);
@@ -1486,10 +1522,10 @@ window.saveWeights=saveWeights; window.pickOnMap=pickOnMap;
 window.csDragStart=csDragStart; window.csDragOver=csDragOver; window.csDrop=csDrop; window.csDragEnd=csDragEnd;
 window.shRowDragStart=shRowDragStart; window.shRowDragOver=shRowDragOver; window.shRowDrop=shRowDrop; window.shRowDragEnd=shRowDragEnd;
 window.hideStaff=hideStaff; window.showStaff=showStaff; window.toggleShowHidden=toggleShowHidden;
-window.saleBarsHTML=saleBarsHTML; window.showHelp=showHelp; window.fillAll=fillAll; window.fillRow=fillRow;
+window.saleBarsHTML=saleBarsHTML; window.showHelp=showHelp; window.setTheme=setTheme; window.fillAll=fillAll; window.fillRow=fillRow;
 
-$('sh-off').addEventListener('change', render);
-$('sh-mon').addEventListener('change', render);
+$('sh-off').addEventListener('change', ()=>{ if(confirmLeave()){ clearDirty(); render(); } });
+$('sh-mon').addEventListener('change', ()=>{ if(confirmLeave()){ clearDirty(); render(); } });
 let _resizeT=null;
 window.addEventListener('resize', ()=>{
   clearTimeout(_resizeT);
@@ -1497,6 +1533,7 @@ window.addEventListener('resize', ()=>{
 });
 document.addEventListener('fb-sdk-ready', initFirebase);
 if(window._fbImports) initFirebase();
+initTheme();
 fillOffices();
 </script>
 </body>
