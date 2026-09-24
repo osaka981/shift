@@ -81,7 +81,7 @@
 <header>
   <div>
     <h1>大阪急配　シフト表</h1>
-    <div class="ver" id="app-ver">ver 2026-09-24.8</div>
+    <div class="ver" id="app-ver">ver 2026-09-24.9</div>
   </div>
   <div class="row" style="margin-left:auto;">
     <select id="sh-off" class="fi" style="display:none;"></select>
@@ -151,7 +151,7 @@ document.dispatchEvent(new Event('fb-sdk-ready'));
 
 <script>
 'use strict';
-const APP_VER = '2026-09-24.8';
+const APP_VER = '2026-09-24.9';
 console.log('[シフト表] APP_VER', APP_VER);
 
 const FB_CONFIG = {
@@ -458,7 +458,7 @@ function render(){
     for(let d=1; d<=last; d++){
       const key=`${mon}-${String(d).padStart(2,'0')}`;
       const sm=saleMap[key];
-      r0+=`<td class="num" title="${sm?esc(sm.names.join('・')):''}" style="${sm?'color:#e08b1f;font-weight:700;':''}">${sm?Math.round(sm.factor*100)+'%':''}</td>`;
+      r0+=`<td class="num" title="${sm?esc(sm.names.join('・')):''}" style="${sm?'color:#e08b1f;font-weight:700;':''}">${sm?Math.round(sm.factor*100)+'%'+`<div class="xs" style="font-weight:400;">${esc(sm.names.map(n=>n.slice(0,6)).join('/'))}</div>`:''}</td>`;
     }
     r0+='<td></td><td class="num"></td></tr>';
     foot+=r0;
@@ -474,7 +474,7 @@ function render(){
       for(let d=1; d<=last; d++){
         const key=`${mon}-${String(d).padStart(2,'0')}`;
         const sm=saleMap[key];
-        r0+=`<td class="num" title="${sm?esc(sm.names.join('・')):''}" style="${sm?'color:#e08b1f;font-weight:700;':''}">${sm?Math.round(sm.factor*100)+'%':''}</td>`;
+        r0+=`<td class="num" title="${sm?esc(sm.names.join('・')):''}" style="${sm?'color:#e08b1f;font-weight:700;':''}">${sm?Math.round(sm.factor*100)+'%'+`<div class="xs" style="font-weight:400;">${esc(sm.names.map(n=>n.slice(0,6)).join('/'))}</div>`:''}</td>`;
       }
       r0+='<td></td><td class="num"></td></tr>';
       foot+=r0;
@@ -490,6 +490,7 @@ function render(){
     </div>
     <div class="xs muted" id="sh-scroll-hint" style="margin-bottom:4px;display:none;">表は横にスクロールできます。氏名の列は固定されます。</div>
     <div class="tw"><table id="sh-table"><thead>${head}</thead><tbody>${body}</tbody><tfoot>${foot}</tfoot></table></div>
+    ${saleListHTML(mon, saleMap)}
     ${colMode?courseSummaryHTML(office, mon, data):''}
     ${weightsHTML(colMode)}
     <div class="row" style="justify-content:flex-end;margin-top:10px;">
@@ -503,6 +504,31 @@ function render(){
   const hint=$('sh-scroll-hint');
   if(hint) hint.style.display = (window.innerWidth<=720) ? 'block' : 'none';
 }
+// ★ 2026-09-24.9: その月のセール予定の一覧（媒体名・セール名が分かるように）
+function saleListHTML(mon, saleMap){
+  const keys=Object.keys(saleMap||{}).sort();
+  if(!keys.length) return '';
+  const rows=keys.map(k=>{
+    const sm=saleMap[k];
+    const d=Number(k.slice(8,10));
+    const dow='日月火水木金土'[new Date(k+'T00:00:00').getDay()];
+    return sm.items.map((it,i)=>`<tr>
+      <td class="mono">${i===0?`${d}日(${dow})`:''}</td>
+      <td style="text-align:left;">${esc(it.src.media||'')}</td>
+      <td style="text-align:left;">${esc(it.src.name||'')}</td>
+      <td class="mono">${Math.round(it.factor*100)}%</td>
+      <td class="mono xs">${it.src.shiftDays?`購買日から${it.src.shiftDays}日後`:'当日'}</td>
+      <td class="xs" style="text-align:left;">${esc(it.src.memo||'')}</td>
+    </tr>`).join('');
+  }).join('');
+  return `<div style="margin-top:12px;">
+    <div class="xs fw7" style="margin-bottom:4px;">この月のセール予定</div>
+    <div class="tw" style="max-height:none;"><table>
+      <thead><tr><th>日</th><th>媒体</th><th>セール名</th><th>係数</th><th>反映</th><th>メモ</th></tr></thead>
+      <tbody>${rows}</tbody></table></div>
+  </div>`;
+}
+
 // ★ 2026-09-24.6: コースの所要時間の一覧（出勤時間の振り分け用）
 function courseSummaryHTML(office, mon, data){
   const list=(D.courses||[]).filter(c=>!c.office || c.office===office);
@@ -643,9 +669,11 @@ function _saleFactorMap(mon){
     const key=`${d.getFullYear()}-${String(d.getMonth()+1).padStart(2,'0')}-${String(d.getDate()).padStart(2,'0')}`;
     if(!key.startsWith(mon)) return;
     const f = (e.factor!=null && e.factor!=='') ? Number(e.factor) : (1 + (Number(e.power)||0)*0.1);
-    if(!map[key]) map[key]={factor:1, names:[]};
+    if(!map[key]) map[key]={factor:1, names:[], items:[]};
     map[key].factor *= (isFinite(f)&&f>0 ? f : 1);
-    map[key].names.push(e.name||'セール');
+    const label = [e.media, e.name].filter(Boolean).join(' ') || 'セール';
+    map[key].names.push(label);
+    map[key].items.push({label, factor:(isFinite(f)&&f>0?f:1), src:e});
   });
   return map;
 }
@@ -663,6 +691,7 @@ function importSaleCsv(input){
       const iDate=idx('日付')>=0?idx('日付'):0;
       const iName=idx('イベント')>=0?idx('イベント'):(idx('名')>=0?idx('名'):1);
       const iPow=idx('強')  , iShift=idx('ずら')>=0?idx('ずら'):idx('日数'), iFac=idx('係数'), iMemo=idx('メモ');
+      const iMedia=idx('媒体')>=0?idx('媒体'):(idx('サイト')>=0?idx('サイト'):(idx('通販')>=0?idx('通販'):-1));
       const hasHeader = /日付|date/i.test(head[iDate]||'');
       const rows=(hasHeader?lines.slice(1):lines).map(l=>{
         const c=l.split(',').map(x=>x.trim());
@@ -671,6 +700,7 @@ function importSaleCsv(input){
         const [y,m,d]=date.split('-').map(Number);
         return {
           date:`${y}-${String(m).padStart(2,'0')}-${String(d).padStart(2,'0')}`,
+          media: iMedia>=0 ? (c[iMedia]||'') : '',
           name: c[iName]||'セール',
           power: iPow>=0 ? Number(c[iPow])||0 : 0,
           shiftDays: iShift>=0 ? Number(c[iShift])||0 : 0,
@@ -679,7 +709,7 @@ function importSaleCsv(input){
         };
       }).filter(Boolean);
       if(!rows.length){ alert('読み取れる行がありませんでした。1列目に日付（2026-10-05 など）を入れてください。'); return; }
-      const keep=(D.saleEvents||[]).filter(e=>!rows.some(r=>r.date===e.date && r.name===e.name));
+      const keep=(D.saleEvents||[]).filter(e=>!rows.some(r=>r.date===e.date && r.name===e.name && (r.media||'')===(e.media||'')));
       D.saleEvents=[...keep, ...rows].sort((a,b)=>a.date.localeCompare(b.date));
       const ok=await fbSet('sale_events', D.saleEvents);
       render();
