@@ -81,7 +81,7 @@
 <header>
   <div>
     <h1>大阪急配　シフト表</h1>
-    <div class="ver" id="app-ver">ver 2026-09-24.15</div>
+    <div class="ver" id="app-ver">ver 2026-09-24.16</div>
   </div>
   <div class="row" style="margin-left:auto;">
     <select id="sh-off" class="fi" style="display:none;"></select>
@@ -151,7 +151,7 @@ document.dispatchEvent(new Event('fb-sdk-ready'));
 
 <script>
 'use strict';
-const APP_VER = '2026-09-24.15';
+const APP_VER = '2026-09-24.16';
 console.log('[シフト表] APP_VER', APP_VER);
 
 const FB_CONFIG = {
@@ -474,7 +474,7 @@ function mediaColor(name){
   let h=0; for(const ch of String(name||'')) h=(h*31+ch.charCodeAt(0))%997;
   return MEDIA_COLORS[h%MEDIA_COLORS.length];
 }
-// 反映日ベースで「媒体 → 日 → セール名」を作る
+// ★ 2026-09-24.16: 反映日ベースで「媒体 → セール期間」を作る。重なる期間は段を分ける
 function saleLanes(mon){
   const byMedia={};
   (D.saleEvents||[]).forEach(e=>{
@@ -484,46 +484,50 @@ function saleLanes(mon){
     const d=new Date(base.getFullYear(), base.getMonth(), base.getDate()+(Number(e.shiftDays)||0));
     if(`${d.getFullYear()}-${String(d.getMonth()+1).padStart(2,'0')}`!==mon) return;
     const media=e.media||'その他';
-    (byMedia[media]=byMedia[media]||{})[d.getDate()]=e.name||'セール';
+    const name=e.name||'セール';
+    const day=d.getDate();
+    const list=(byMedia[media]=byMedia[media]||[]);
+    const hit=list.find(x=>x.name===name && (x.to===day-1 || x.from===day+1 || (day>=x.from&&day<=x.to)));
+    if(hit){ hit.from=Math.min(hit.from,day); hit.to=Math.max(hit.to,day); }
+    else list.push({name, from:day, to:day});
   });
-  return byMedia;
+  // 重なるものは段を分ける
+  const lanes={};
+  Object.entries(byMedia).forEach(([media, list])=>{
+    const sorted=list.slice().sort((x,y)=>x.from-y.from);
+    const rows=[];
+    sorted.forEach(ev=>{
+      let row=rows.find(r=>r.every(x=>ev.from>x.to || ev.to<x.from));
+      if(!row){ row=[]; rows.push(row); }
+      row.push(ev);
+    });
+    lanes[media]=rows;
+  });
+  return lanes;
 }
-// セール・祝日の帯（シフト表のヘッダーに入れて、日付の列とずれないようにする）
+// セールの帯（シフト表のヘッダーに入れて、日付の列とずれないようにする）
 function laneRowsHTML(mon, last){
-  let html='';
-  // 祝日
-  const hols=[];
-  for(let d=1; d<=last; d++){
-    const nm=holidayName(`${mon}-${String(d).padStart(2,'0')}`);
-    if(nm) hols.push({d, nm});
-  }
-  if(hols.length){
-    let tds='', d=1;
-    while(d<=last){
-      const hit=hols.find(h=>h.d===d);
-      if(hit){
-        tds+=`<th title="${esc(hit.nm)}" style="background:rgba(224,102,102,.25);color:#ffdede;font-size:9px;font-weight:700;white-space:nowrap;overflow:hidden;">${esc(hit.nm)}</th>`;
-      } else tds+='<th></th>';
-      d++;
-    }
-    html+=`<tr><th style="text-align:left;font-size:10px;">祝日</th>${tds}<th></th><th class="num"></th></tr>`;
-  }
-  // セール（媒体ごと・連続は1本）
   const lanes=saleLanes(mon);
+  const empty='<th style="border-color:transparent;background:transparent;"></th>';
+  let html='';
   Object.keys(lanes).forEach(media=>{
-    const days=lanes[media];
     const col=mediaColor(media);
-    let tds='', d=1;
-    while(d<=last){
-      const nm=days[d];
-      if(!nm){ tds+='<th></th>'; d++; continue; }
-      let span=1;
-      while(d+span<=last && days[d+span]===nm) span++;
-      tds+=`<th colspan="${span}" title="${esc(media)} ${esc(nm)}"
-        style="background:${col};color:#fff;font-size:9.5px;font-weight:700;white-space:nowrap;overflow:hidden;border-radius:3px;">${esc(nm)}</th>`;
-      d+=span;
-    }
-    html+=`<tr><th style="text-align:left;font-size:10px;color:${col};">${esc(media)}</th>${tds}<th></th><th class="num"></th></tr>`;
+    lanes[media].forEach((row, ri)=>{
+      let tds='', d=1;
+      while(d<=last){
+        const ev=row.find(x=>x.from===d);
+        if(ev){
+          const span=Math.min(ev.to, last)-d+1;
+          tds+=`<th colspan="${span}" title="${esc(media)} ${esc(ev.name)}"
+            style="padding:1px 2px;border-color:transparent;background:transparent;">
+            <div style="background:${col};color:#fff;font-size:9.5px;font-weight:700;white-space:nowrap;overflow:hidden;
+              border-radius:9px;padding:1px 6px;line-height:1.4;">${esc(ev.name)}</div></th>`;
+          d+=span;
+        } else { tds+=empty; d++; }
+      }
+      html+=`<tr><th style="text-align:left;font-size:10px;color:${col};border-color:transparent;">${ri===0?esc(media):''}</th>${tds}
+        <th style="border-color:transparent;background:transparent;"></th><th class="num" style="border-color:transparent;background:transparent;"></th></tr>`;
+    });
   });
   return html;
 }
@@ -636,6 +640,7 @@ function render(){
     </div>
     <div class="xs muted" id="sh-scroll-hint" style="margin-bottom:4px;display:none;">表は横にスクロールできます。氏名の列は固定されます。</div>
     <div class="tw"><table id="sh-table"><thead>${head}</thead><tbody>${body}</tbody><tfoot>${foot}</tfoot></table></div>
+    ${holidayNoteHTML(mon, last)}
     ${saleListHTML(mon, saleMap)}
     ${colMode?courseSummaryHTML(office, mon, data):''}
     ${weightsHTML(colMode)}
@@ -793,6 +798,16 @@ function weightsHTML(colMode){
     ${item('~1','〜①')}${item('~2','〜②')}${item('~3','〜③')}
     <button class="btn gh" onclick="saveWeights()">重みを保存</button>
   </div>`;
+}
+// ★ 2026-09-24.16: 祝日は表の下の備考に出す（ますの大きさを変えないため）
+function holidayNoteHTML(mon, last){
+  const items=[];
+  for(let d=1; d<=last; d++){
+    const nm=holidayName(`${mon}-${String(d).padStart(2,'0')}`);
+    if(nm) items.push(`${d}日 ${nm}`);
+  }
+  if(!items.length) return '';
+  return `<div class="xs" style="margin-top:8px;color:#e06666;">祝日：${items.map(esc).join('　')}</div>`;
 }
 function cellStyle(v){
   if(v==='×') return 'box-shadow:inset 0 0 0 99px rgba(128,128,128,.16);';
