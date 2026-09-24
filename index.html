@@ -93,7 +93,7 @@
 <header>
   <div>
     <h1>大阪急配　シフト表</h1>
-    <div class="ver" id="app-ver">ver 2026-09-24.45</div>
+    <div class="ver" id="app-ver">ver 2026-09-24.46</div>
   </div>
   <div class="row" style="margin-left:auto;">
     <select id="sh-off" class="fi" style="display:none;"></select>
@@ -184,7 +184,7 @@ document.dispatchEvent(new Event('fb-sdk-ready'));
 
 <script>
 'use strict';
-const APP_VER = '2026-09-24.45';
+const APP_VER = '2026-09-24.46';
 console.log('[シフト表] APP_VER', APP_VER);
 
 const FB_CONFIG = {
@@ -1564,6 +1564,10 @@ function custPos(id){
 // ★ 2026-09-24.41: 立ち寄り先の場所。既定は顧客の集荷先住所。
 //   本社ロジで積む顧客（ASLAJ・福澤など）は「出発地点（本社）」を選べる。地図で個別に指定もできる。
 function stopPos(st, office){
+  if(st.type==='origin'){
+    const o=originOf(office);
+    return {lat:o.lat, lng:o.lng, name:'本社（戻る）', addr:o.addr||''};
+  }
   if(st.type==='post'){
     const p=officePos(st.postName);
     return p ? {...p, name:`${st.postName}（持込）`} : {lat:0,lng:0,name:`${st.postName}（持込・位置なし）`,addr:''};
@@ -1592,44 +1596,47 @@ function calcCourse(c){
   const workDef=Number($('cs-work')?.value)||10;
   const postWork=Number($('cs-post-work')?.value)||20;
   const start=originOf($('sh-off').value||'');
+  // ★ 2026-09-24.46: 分は小数のまま積み上げ、表示のときだけ丸める（距離と時間がずれないように）
   let t=hm2min(c.depart||'10:00');
   let prev=start, km=0;
   const rows=[];
+  const showMove=(d,min)=> d>0.05 ? Math.max(1, Math.round(min)) : Math.round(min);
   (c.stops||[]).forEach(st=>{
     const p=stopPos(st, $('sh-off').value||'');
     const d=(prev&&p)?distKm(prev,p)*ROAD_RATIO:0;
     km+=d;
-    const move=speed>0?Math.round(d/speed*60):0;
-    t+=move;
+    const mv=speed>0?(d/speed*60):0;
+    t+=mv;
     let wait=0;
-    if(st.at){ const want=hm2min(st.at); if(want>t){ wait=want-t; t=want; } }
+    if(st.at){ const want=hm2min(st.at); if(want>t){ wait=Math.round(want-t); t=want; } }
     const arrive=t;
-    const work=Number(st.work) || (st.type==='post' ? postWork : workDef);
+    const work=(st.work!=null && st.work!=='') ? Number(st.work)
+      : (st.type==='post' ? postWork : st.type==='origin' ? 0 : workDef);
     t+=work;
-    rows.push({name:p?p.name:'(位置なし)', arrive:min2hm(arrive), leave:min2hm(t),
-      move, wait, work, km:d, at:st.at||'', noPos:!p||!p.lat});
+    rows.push({name:p?p.name:'(位置なし)', arrive:min2hm(Math.round(arrive)), leave:min2hm(Math.round(t)),
+      move:showMove(d,mv), wait, work, km:d, at:st.at||'', noPos:!p||!p.lat});
     if(p&&p.lat) prev=p;
   });
   if(c.post){
     const p=officePos(c.post);
     const d=(prev&&p)?distKm(prev,p)*ROAD_RATIO:0;
     km+=d;
-    const move=speed>0?Math.round(d/speed*60):0;
-    t+=move;
+    const mv=speed>0?(d/speed*60):0;
+    t+=mv;
     const arrive=t;
     t+=postWork;
-    rows.push({name:`${c.post}（持込）`, arrive:min2hm(arrive), leave:min2hm(t),
-      move, wait:0, work:postWork, km:d, at:'', post:true, noPos:!p||!p.lat});
+    rows.push({name:`${c.post}（持込）`, arrive:min2hm(Math.round(arrive)), leave:min2hm(Math.round(t)),
+      move:showMove(d,mv), wait:0, work:postWork, km:d, at:'', post:true, noPos:!p||!p.lat});
     if(p&&p.lat) prev=p;
   }
   // 営業所へ戻る
   if(start && prev && prev!==start){
     const d=distKm(prev,start)*ROAD_RATIO; km+=d;
-    const move=speed>0?Math.round(d/speed*60):0;
-    t+=move;
-    rows.push({name:`${start.name}（帰社）`, arrive:min2hm(t), leave:'', move, wait:0, work:0, km:d, back:true});
+    const mv=speed>0?(d/speed*60):0;
+    t+=mv;
+    rows.push({name:`${start.name}（帰社）`, arrive:min2hm(Math.round(t)), leave:'', move:showMove(d,mv), wait:0, work:0, km:d, back:true});
   }
-  return {rows, endMin:t, km, totalMin:t-hm2min(c.depart||'10:00')};
+  return {rows, endMin:Math.round(t), km, totalMin:Math.round(t-hm2min(c.depart||'10:00'))};
 }
 function renderCourse(selId){
   renderOffTabs();
@@ -1689,7 +1696,9 @@ function renderCourse(selId){
             style="cursor:grab;">
           <td title="ドラッグで並べ替え">⠿ ${i+1}</td>
           <td style="text-align:left;">${esc(row.name||'')}${row.noPos?'<span class="xs" style="color:#e06666;">（位置未設定）</span>':''}</td>
-          <td>${st.type==='post'
+          <td>${st.type==='origin'
+            ? '<span class="xs muted">本社</span>'
+            : st.type==='post'
             ? '<span class="xs muted">郵便局</span>'
             : `<select class="fi" style="width:auto;font-size:11px;padding:3px 4px;" onchange="setStop(${i},'loc',this.value)">
             <option value="cust"${(!st.loc||st.loc==='cust')?' selected':''}>集荷先住所</option>
@@ -1724,6 +1733,8 @@ function renderCourse(selId){
       <button class="btn gh" onclick="addStop()">顧客を追加</button>
       <input type="text" id="cs-add-post" class="fi" list="cs-post-list" style="width:170px;" placeholder="郵便局名">
       <button class="btn gh" onclick="addPostStop()">郵便局を追加</button>
+      <button class="btn gh" onclick="addOriginStop()">本社に戻る</button>
+      <button class="btn gh" onclick="renderCourse()">再計算</button>
       <button class="btn grn" style="margin-left:auto;" onclick="saveCourses()">コースを保存</button>
     </div>`;
   drawMap(c);
@@ -1794,6 +1805,12 @@ function csDrop(e, to){
   renderCourse();
 }
 // ★ 2026-09-24.45: 郵便局も立ち寄り先として並べられる（順番の入れ替え・削除も同じ）
+// ★ 2026-09-24.46: 途中で本社に戻って再出発する
+function addOriginStop(){
+  const c=curCourse(); if(!c) return;
+  c.stops=[...(c.stops||[]), {type:'origin', at:'', work:null}];
+  renderCourse();
+}
 function addPostStop(){
   const c=curCourse(); if(!c) return;
   const name=($('cs-add-post')?.value||'').trim();
@@ -2029,7 +2046,7 @@ window.setView=setView; window.pickOffice=pickOffice; window.renderCourse=render
 window.newCourse=newCourse; window.delCourse=delCourse; window.saveCourses=saveCourses;
 window.setDepart=setDepart; window.setPost=setPost; window.setStop=setStop;
 window.addStop=addStop; window.moveStop=moveStop; window.delStop=delStop;
-window.addPostStop=addPostStop; window.pickPostStopOnMap=pickPostStopOnMap;
+window.addPostStop=addPostStop; window.pickPostStopOnMap=pickPostStopOnMap; window.addOriginStop=addOriginStop;
 window.saveWeights=saveWeights; window.pickOnMap=pickOnMap;
 window.csDragStart=csDragStart; window.csDragOver=csDragOver; window.csDrop=csDrop; window.csDragEnd=csDragEnd;
 window.shRowDragStart=shRowDragStart; window.shRowDragOver=shRowDragOver; window.shRowDrop=shRowDrop; window.shRowDragEnd=shRowDragEnd;
