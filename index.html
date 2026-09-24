@@ -26,7 +26,7 @@
     font-family:-apple-system,BlinkMacSystemFont,'Hiragino Sans','Noto Sans JP',sans-serif;}
   body{padding-top:env(safe-area-inset-top,0px);padding-bottom:env(safe-area-inset-bottom,0px);}
   header{background:var(--bg2);border-bottom:1px solid var(--brd);padding:10px 14px;
-    display:flex;align-items:center;gap:10px;flex-wrap:wrap;position:sticky;top:0;z-index:5;}
+    display:flex;align-items:center;gap:10px;flex-wrap:wrap;position:sticky;top:0;z-index:50;}
   h1{font-size:15px;margin:0;font-weight:700;}
   .ver{font-family:var(--mono);font-size:10px;color:var(--txt2);}
   .wrap{padding:12px 14px 40px;max-width:100%;}
@@ -45,8 +45,8 @@
   th,td{border:1px solid var(--brd);padding:5px 4px;text-align:center;white-space:nowrap;}
   thead th{position:sticky;top:0;background:var(--bg3);z-index:2;}
   tbody td:first-child,thead th:first-child,tfoot td:first-child{position:sticky;left:0;background:var(--bg2) !important;
-    text-align:left;z-index:5;box-shadow:1px 0 0 var(--brd) inset, -1px 0 0 var(--brd);}
-  thead th:first-child{z-index:6;}
+    text-align:left;z-index:3;box-shadow:1px 0 0 var(--brd) inset, -1px 0 0 var(--brd);}
+  thead th:first-child{z-index:4;}
   tfoot tr{position:sticky;bottom:0;z-index:2;}
   tfoot td{background:var(--bg3);}
   @media print{ th,td{border:1px solid #999 !important;} }
@@ -93,7 +93,7 @@
 <header>
   <div>
     <h1>大阪急配　シフト表</h1>
-    <div class="ver" id="app-ver">ver 2026-09-24.37</div>
+    <div class="ver" id="app-ver">ver 2026-09-24.39</div>
   </div>
   <div class="row" style="margin-left:auto;">
     <select id="sh-off" class="fi" style="display:none;"></select>
@@ -101,6 +101,7 @@
     <span id="fb-state" class="xs muted">接続中…</span>
   </div>
   <div class="row" id="off-tabs" style="flex-basis:100%;gap:4px;"></div>
+  <div class="row" id="mon-tabs" style="flex-basis:100%;gap:4px;"></div>
   <div class="row" id="view-tabs" style="flex-basis:100%;gap:4px;align-items:center;">
     <button class="btn" id="vt-shift" onclick="setView('shift')">シフト表</button>
     <button class="btn gh" id="vt-course" onclick="setView('course')">集荷コース</button>
@@ -171,7 +172,7 @@ document.dispatchEvent(new Event('fb-sdk-ready'));
 
 <script>
 'use strict';
-const APP_VER = '2026-09-24.37';
+const APP_VER = '2026-09-24.39';
 console.log('[シフト表] APP_VER', APP_VER);
 
 const FB_CONFIG = {
@@ -468,17 +469,39 @@ function dowFactors(office, mon){
     const from=new Date(base.getFullYear(), base.getMonth()-6, 1).toISOString().slice(0,7);
     map=dailyTotals(office, from, mon);
   }
+  // ★ 2026-09-24.38: 実績のない日も0として数える（配達していない日曜が消えないように）
+  //   祝日は日曜の枠、祝日の翌日は月曜の枠として集計する
   const sum=[0,0,0,0,0,0,0], cnt=[0,0,0,0,0,0,0];
-  Object.entries(map).forEach(([d,v])=>{
-    if(!v) return;
-    const dow=new Date(d+'T00:00:00').getDay();
-    sum[dow]+=v; cnt[dow]++;
+  const months=new Set(Object.keys(map).map(d=>d.slice(0,7)));
+  if(src.length) src.forEach(x=>months.add(x));
+  const slotOf=(iso)=>{
+    if(holidayName(iso)) return 0;                       // 祝日 → 日曜の枠
+    const dt=new Date(iso+'T00:00:00');
+    const prev=new Date(dt.getFullYear(), dt.getMonth(), dt.getDate()-1);
+    const pIso=`${prev.getFullYear()}-${String(prev.getMonth()+1).padStart(2,'0')}-${String(prev.getDate()).padStart(2,'0')}`;
+    if(holidayName(pIso)) return 1;                      // 祝日の翌日 → 月曜の枠
+    return dt.getDay();
+  };
+  months.forEach(ym=>{
+    const [yy,mm]=ym.split('-').map(Number);
+    if(!yy||!mm) return;
+    const lastD=new Date(yy,mm,0).getDate();
+    for(let d=1; d<=lastD; d++){
+      const iso=`${ym}-${String(d).padStart(2,'0')}`;
+      const slot=slotOf(iso);
+      sum[slot]+=(map[iso]||0);
+      cnt[slot]++;
+    }
   });
   const avg=sum.map((s,i)=>cnt[i]?s/cnt[i]:0);
   const used=avg.filter(v=>v>0);
   if(!used.length) return {f:[1,1,1,1,1,1,1], hasData:false, src:src};
   const mean=used.reduce((a,b)=>a+b,0)/used.length;
-  return {f:avg.map(v=>v>0?v/mean:0), hasData:true, src:src};
+  let f=avg.map(v=>v>0?v/mean:0);
+  // 手で上書きした係数があれば、それを優先する（％で保存）
+  const ov=(D.settings?.dowOverride||{})[office]||{};
+  f=f.map((v,i)=> (ov[i]!=null && ov[i]!=='') ? Number(ov[i])/100 : v);
+  return {f, hasData:true, src:src, ov};
 }
 // 前年同月の実績合計
 function lastYearTotal(office, mon){
@@ -496,8 +519,15 @@ function spreadByDow(total, mon, fac, saleMap){
   let sum=0;
   for(let d=1; d<=last; d++){
     const key=`${mon}-${String(d).padStart(2,'0')}`;
-    const dow=new Date(key+'T00:00:00').getDay();
-    // ★ 2026-09-24.3: 曜日係数 × セール係数。最後に月合計へ正規化する
+    // ★ 2026-09-24.38: 祝日は日曜、祝日の翌日は月曜の係数を使う
+    let dow;
+    if(holidayName(key)) dow=0;
+    else {
+      const dt=new Date(key+'T00:00:00');
+      const prev=new Date(dt.getFullYear(), dt.getMonth(), dt.getDate()-1);
+      const pIso=`${prev.getFullYear()}-${String(prev.getMonth()+1).padStart(2,'0')}-${String(prev.getDate()).padStart(2,'0')}`;
+      dow = holidayName(pIso) ? 1 : dt.getDay();
+    }
     const v=(fac[dow]||0) * ((saleMap && saleMap[key]) ? saleMap[key].factor : 1);
     raw.push(v); sum+=v;
   }
@@ -755,6 +785,7 @@ function render(){
     ${holidayNoteHTML(mon, last)}
     ${saleListHTML(mon, saleMap)}
     ${colMode?courseSummaryHTML(office, mon, data):''}
+    ${dowEditHTML(office, mon)}
     ${weightsHTML(colMode)}
     <div class="row" style="justify-content:flex-end;margin-top:10px;">
       <span class="xs muted" style="margin-right:auto;">${data.updatedAt?`確定 ${new Date(data.updatedAt).toLocaleString('ja-JP')}`:'未確定'}
@@ -767,6 +798,7 @@ function render(){
       <button class="btn gh" onclick="saveDraft()">下書き保存</button>
       <button class="btn grn" onclick="save()">確定して保存</button>
     </div>`;
+  renderMonTabs();
   refreshForecastInputs();
   // ★ 2026-09-24.8: スマホでは横スクロールの案内を出す
   const hint=$('sh-scroll-hint');
@@ -953,6 +985,41 @@ function courseSummaryHTML(office, mon, data){
       <thead><tr><th>コース</th><th>出発</th><th>終了</th><th>所要</th><th>走行</th><th>立ち寄り</th><th>この月の割当</th></tr></thead>
       <tbody>${rows}</tbody></table></div>
   </div>`;
+}
+// ★ 2026-09-24.38: 曜日係数の確認と手直し
+function dowEditHTML(office, mon){
+  const dw=dowFactors(office, mon);
+  const W=['日','月','火','水','木','金','土'];
+  const ov=(D.settings?.dowOverride||{})[office]||{};
+  return `<div class="row" style="margin-top:12px;gap:6px;align-items:center;flex-wrap:wrap;">
+    <span class="xs fw7">曜日の係数（％）</span>
+    ${W.map((w,i)=>`<span class="xs muted">${w}</span>
+      <input type="number" class="fi dow-in" data-i="${i}" style="width:62px;"
+        value="${ov[i]!=null&&ov[i]!==''?ov[i]:Math.round((dw.f[i]||0)*100)}">`).join('')}
+    <button class="btn gh" onclick="saveDowOverride()">係数を保存</button>
+    <button class="btn gh" onclick="clearDowOverride()">実績に戻す</button>
+    <span class="xs muted" style="flex-basis:100%;">実績から出した値が入っています。実感と違う場合は数字を直して保存してください（祝日は日曜、祝日の翌日は月曜として計算します）。</span>
+  </div>`;
+}
+async function saveDowOverride(){
+  const office=$('sh-off').value||'';
+  const ov={};
+  document.querySelectorAll('.dow-in').forEach(el=>{ ov[el.dataset.i]=Number(el.value)||0; });
+  const st={...(D.settings||{})};
+  st.dowOverride={...(st.dowOverride||{}), [office]:ov};
+  D.settings=st;
+  const ok=await fbSet('shift_settings', st);
+  render();
+  if(!ok) alert('端末には保存しましたが、サーバーへの保存に失敗しました。');
+}
+async function clearDowOverride(){
+  const office=$('sh-off').value||'';
+  const st={...(D.settings||{})};
+  const o={...(st.dowOverride||{})}; delete o[office];
+  st.dowOverride=o; D.settings=st;
+  const ok=await fbSet('shift_settings', st);
+  render();
+  if(!ok) alert('端末には保存しましたが、サーバーへの保存に失敗しました。');
 }
 // 重みの設定
 function weightsHTML(colMode){
@@ -1366,6 +1433,29 @@ function setView(v){
   $('vt-course').className = v==='course' ? 'btn' : 'btn gh';
   if(v==='course') renderCourse(); else render();
 }
+// ★ 2026-09-24.39: 月のサブタブ（今月・翌月・翌々月）
+function renderMonTabs(){
+  const box=$('mon-tabs'); if(!box) return;
+  const cur=_ymNorm($('sh-mon')?.value||'');
+  const now=new Date();
+  const list=[];
+  for(let i=0;i<3;i++){
+    const d=new Date(now.getFullYear(), now.getMonth()+i, 1);
+    list.push({ym:`${d.getFullYear()}-${String(d.getMonth()+1).padStart(2,'0')}`, label:`${d.getMonth()+1}月${i===0?'（今月）':''}`});
+  }
+  if(cur && !list.some(x=>x.ym===cur)){
+    const [yy,mm]=cur.split('-');
+    list.push({ym:cur, label:`${Number(mm)}月`});
+  }
+  box.innerHTML=list.map(x=>`<button class="btn ${x.ym===cur?'':'gh'}" onclick="pickMonth('${x.ym}')">${x.label}</button>`).join('');
+}
+function pickMonth(ym){
+  if(!confirmLeave()) return;
+  _work={}; clearDirty();
+  if($('sh-mon')) $('sh-mon').value=ym;
+  renderMonTabs();
+  if(_view==='course') renderCourse(); else render();
+}
 function renderOffTabs(){
   const box=$('off-tabs'); if(!box) return;
   const offs=delOffices();
@@ -1675,7 +1765,8 @@ window.csDragStart=csDragStart; window.csDragOver=csDragOver; window.csDrop=csDr
 window.shRowDragStart=shRowDragStart; window.shRowDragOver=shRowDragOver; window.shRowDrop=shRowDrop; window.shRowDragEnd=shRowDragEnd;
 window.hideStaff=hideStaff; window.showStaff=showStaff; window.toggleShowHidden=toggleShowHidden;
 window.saleBarsHTML=saleBarsHTML; window.showHelp=showHelp; window.setTheme=setTheme; window.cellKey=cellKey;
-window.saveDraft=saveDraft; window.fillAll=fillAll; window.fillRow=fillRow;
+window.saveDraft=saveDraft; window.saveDowOverride=saveDowOverride; window.clearDowOverride=clearDowOverride;
+window.pickMonth=pickMonth; window.fillAll=fillAll; window.fillRow=fillRow;
 
 $('sh-off').addEventListener('change', ()=>{ if(confirmLeave()){ _work={}; clearDirty(); render(); } });
 $('sh-mon').addEventListener('change', ()=>{ if(confirmLeave()){ _work={}; clearDirty(); render(); } });
@@ -1688,6 +1779,7 @@ document.addEventListener('fb-sdk-ready', initFirebase);
 if(window._fbImports) initFirebase();
 initTheme();
 fillOffices();
+renderMonTabs();
 </script>
 </body>
 </html>
