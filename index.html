@@ -93,7 +93,7 @@
 <header>
   <div>
     <h1>大阪急配　シフト表</h1>
-    <div class="ver" id="app-ver">ver 2026-09-24.46</div>
+    <div class="ver" id="app-ver">ver 2026-09-24.47</div>
   </div>
   <div class="row" style="margin-left:auto;">
     <select id="sh-off" class="fi" style="display:none;"></select>
@@ -184,7 +184,7 @@ document.dispatchEvent(new Event('fb-sdk-ready'));
 
 <script>
 'use strict';
-const APP_VER = '2026-09-24.46';
+const APP_VER = '2026-09-24.47';
 console.log('[シフト表] APP_VER', APP_VER);
 
 const FB_CONFIG = {
@@ -1638,6 +1638,10 @@ function calcCourse(c){
   }
   return {rows, endMin:Math.round(t), km, totalMin:Math.round(t-hm2min(c.depart||'10:00'))};
 }
+function ensureUid(c){
+  (c.stops||[]).forEach(st=>{ if(!st.uid) st.uid='s'+Math.random().toString(36).slice(2,9); });
+}
+function stopIndexByUid(c, uid){ return (c.stops||[]).findIndex(x=>x.uid===uid); }
 function renderCourse(selId){
   renderOffTabs();
   const sel=$('cs-sel'); if(!sel) return;
@@ -1649,6 +1653,7 @@ function renderCourse(selId){
   const c=curCourse();
   const root=$('cs-root');
   if(!c){ root.innerHTML='<div class="al al-w">「＋コースを追加」でコースを作ってください。</div>'; drawMap(null); return; }
+  ensureUid(c);
   const r=calcCourse(c);
   // ★ 2026-09-24.7: 営業所の位置が無いと、1件目までの移動が0分になる
   const startPos=originOf($('sh-off').value||'');
@@ -1691,34 +1696,35 @@ function renderCourse(selId){
         </tr>
         ${(c.stops||[]).map((st,i)=>{
         const row=r.rows[i]||{};
-        return `<tr draggable="true" data-i="${i}"
-            ondragstart="csDragStart(event,${i})" ondragover="csDragOver(event)" ondrop="csDrop(event,${i})" ondragend="csDragEnd(event)"
-            style="cursor:grab;">
+        return `<tr draggable="true" data-uid="${st.uid}"
+            ondragstart="csDragStart(event,'${st.uid}')" ondragover="csDragOver(event)" ondrop="csDrop(event,'${st.uid}')" ondragend="csDragEnd(event)"
+            style="cursor:grab;${_pickStopUid===st.uid?'outline:2px solid var(--accent);':''}">
           <td title="ドラッグで並べ替え">⠿ ${i+1}</td>
           <td style="text-align:left;">${esc(row.name||'')}${row.noPos?'<span class="xs" style="color:#e06666;">（位置未設定）</span>':''}</td>
           <td>${st.type==='origin'
             ? '<span class="xs muted">本社</span>'
             : st.type==='post'
             ? '<span class="xs muted">郵便局</span>'
-            : `<select class="fi" style="width:auto;font-size:11px;padding:3px 4px;" onchange="setStop(${i},'loc',this.value)">
+            : `<select class="fi" style="width:auto;font-size:11px;padding:3px 4px;" onchange="setStopU('${st.uid}','loc',this.value)">
             <option value="cust"${(!st.loc||st.loc==='cust')?' selected':''}>集荷先住所</option>
             <option value="origin"${st.loc==='origin'?' selected':''}>本社ロジ</option>
             <option value="map"${(st.loc&&typeof st.loc==='object')?' selected':''}>地図で指定</option>
           </select>`}</td>
           <td><input type="time" class="fi" style="width:100px;" value="${esc(st.at||'')}"
-            oninput="holdStop(${i},'at',this.value)" onblur="commitCourseEdit()" onkeydown="if(event.key==='Enter'){this.blur();}"></td>
+            oninput="holdStopU('${st.uid}','at',this.value)" onblur="commitCourseEdit()" onkeydown="if(event.key==='Enter'){this.blur();}"></td>
           <td class="mono">${esc(row.arrive||'')}</td>
           <td class="mono">${esc(row.leave||'')}</td>
           <td class="mono xs">${row.move||0}分</td>
           <td class="mono xs" style="${row.wait?'color:#e08b1f;':''}">${row.wait?row.wait+'分':''}</td>
           <td><input type="number" class="fi" style="width:64px;" value="${st.work!=null?st.work:''}" placeholder="${Number($('cs-work')?.value)||10}"
-            oninput="holdStop(${i},'work',this.value)" onblur="commitCourseEdit()" onkeydown="if(event.key==='Enter'){this.blur();}"></td>
+            oninput="holdStopU('${st.uid}','work',this.value)" onblur="commitCourseEdit()" onkeydown="if(event.key==='Enter'){this.blur();}"></td>
           <td class="mono xs">${(row.km||0).toFixed(1)}km</td>
           <td>
-            <button class="btn gh" style="padding:2px 6px;font-size:10px;" onclick="moveStop(${i},-1)">↑</button>
-            <button class="btn gh" style="padding:2px 6px;font-size:10px;" onclick="moveStop(${i},1)">↓</button>
-            <button class="btn gh" style="padding:2px 6px;font-size:10px;" onclick="${st.type==='post'?`pickPostStopOnMap(${i})`:`pickOnMap(${st.custId})`}" title="地図をクリックして位置を決める">位置</button>
-            <button class="btn gh" style="padding:2px 6px;font-size:10px;" onclick="delStop(${i})">×</button>
+            <button class="btn gh" style="padding:2px 6px;font-size:10px;" onclick="moveStopU('${st.uid}',-1)">↑</button>
+            <button class="btn gh" style="padding:2px 6px;font-size:10px;" onclick="moveStopU('${st.uid}',1)">↓</button>
+            ${st.type==='origin'?'':`<button class="btn gh" style="padding:2px 6px;font-size:10px;${_pickStopUid===st.uid?'background:var(--accent);color:#fff;':''}"
+              onclick="startFixPos('${st.uid}')" title="この行の場所を地図で直す">位置</button>`}
+            <button class="btn gh" style="padding:2px 6px;font-size:10px;" onclick="delStopU('${st.uid}')">×</button>
           </td>
         </tr>`;
       }).join('')}</tbody>
@@ -1771,6 +1777,10 @@ function commitCourseEdit(){
 }
 function setDepart(v){ const c=curCourse(); if(!c) return; c.depart=v; renderCourse(); }
 function setPost(v){ const c=curCourse(); if(!c) return; c.post=v||null; renderCourse(); }
+function setStopU(uid, key, v){ const c=curCourse(); if(!c) return; const i=stopIndexByUid(c,uid); if(i>=0) setStop(i,key,v); }
+function holdStopU(uid, key, v){ const c=curCourse(); if(!c) return; const i=stopIndexByUid(c,uid); if(i>=0) holdStop(i,key,v); }
+function moveStopU(uid, d){ const c=curCourse(); if(!c) return; const i=stopIndexByUid(c,uid); if(i>=0) moveStop(i,d); }
+function delStopU(uid){ const c=curCourse(); if(!c) return; const i=stopIndexByUid(c,uid); if(i>=0) delStop(i); }
 function setStop(i, key, v){
   const c=curCourse(); if(!c) return;
   if(key==='work') c.stops[i].work = v===''?null:Number(v);
@@ -1789,17 +1799,19 @@ function addStop(){
 }
 // ★ 2026-09-24.11: ドラッグで立ち寄り順を入れ替える
 let _csDragFrom=null;
-function csDragStart(e, i){ _csDragFrom=i; try{ e.dataTransfer.effectAllowed='move'; e.dataTransfer.setData('text/plain', String(i)); }catch(_){} }
+function csDragStart(e, uid){ _csDragFrom=uid; try{ e.dataTransfer.effectAllowed='move'; e.dataTransfer.setData('text/plain', String(uid)); }catch(_){} }
 function csDragOver(e){ e.preventDefault(); try{ e.dataTransfer.dropEffect='move'; }catch(_){}
   const tr=e.currentTarget; if(tr && tr.style) tr.style.outline='2px solid var(--accent)'; }
 function csDragEnd(e){ document.querySelectorAll('#cs-tbody tr').forEach(tr=>tr.style.outline=''); _csDragFrom=null; }
-function csDrop(e, to){
+function csDrop(e, toUid){
   e.preventDefault();
   document.querySelectorAll('#cs-tbody tr').forEach(tr=>tr.style.outline='');
-  const from = _csDragFrom!=null ? _csDragFrom : Number(e.dataTransfer?.getData('text/plain'));
+  const fromUid=_csDragFrom || (e.dataTransfer?e.dataTransfer.getData('text/plain'):'');
   _csDragFrom=null;
   const c=curCourse();
-  if(!c || from==null || isNaN(from) || from===to) return;
+  if(!c || !fromUid || fromUid===toUid) return;
+  const from=stopIndexByUid(c, fromUid), to=stopIndexByUid(c, toUid);
+  if(from<0 || to<0) return;
   const item=c.stops.splice(from,1)[0];
   c.stops.splice(to,0,item);
   renderCourse();
@@ -1829,6 +1841,7 @@ function delStop(i){ const c=curCourse(); if(!c) return; c.stops.splice(i,1); re
 // ★ 2026-09-24.6: 地図をクリックして顧客の位置を決める
 let _pickCustId=null;
 let _pickStopIdx=null;
+let _pickStopUid=null;
 let _pickTarget=null;   // {kind:'origin'} / {kind:'office', name}
 function pickOriginOnMap(){
   _pickTarget={kind:'origin'};
@@ -1838,6 +1851,16 @@ function pickPostOnMap(){
   const c=curCourse(); if(!c || !c.post){ alert('先に持込先を選んでください'); return; }
   _pickTarget={kind:'office', name:c.post};
   alert(`地図で ${c.post} の位置をクリックしてください。`);
+}
+function startFixPos(uid){
+  const c=curCourse(); if(!c) return;
+  const i=stopIndexByUid(c, uid); if(i<0) return;
+  _pickStopUid=uid;
+  const p=stopPos(c.stops[i], $('sh-off').value||'');
+  renderCourse();
+  const note=$('map-q-note');
+  if(note) note.textContent=`「${p?p.name:''}」（${i+1}番）の場所を直します。地図をクリックするか、検索してピンを動かして「選択中の立ち寄り先に」を押してください。`;
+  alert(`${p?p.name:''}（${i+1}番）の場所を直します。地図の該当地点をクリックしてください。`);
 }
 function pickPostStopOnMap(i){
   const c=curCourse(); if(!c || !c.stops[i]) return;
@@ -1917,9 +1940,13 @@ async function useFound(kind){
   } else if(kind==='stop'){
     const c=curCourse();
     if(!c || !(c.stops||[]).length){ alert('コースに立ち寄り先がありません。'); return; }
-    const idx=prompt(`何番目の立ち寄り先の場所にしますか？（1〜${c.stops.length}）`, '1');
-    if(idx===null) return;
-    const i=Number(idx)-1;
+    let i;
+    if(_pickStopUid){ i=stopIndexByUid(c, _pickStopUid); _pickStopUid=null; }
+    else {
+      const idx=prompt(`何番目の立ち寄り先の場所にしますか？（1〜${c.stops.length}）`, '1');
+      if(idx===null) return;
+      i=Number(idx)-1;
+    }
     if(!(i>=0 && i<c.stops.length)){ alert('番号が正しくありません'); return; }
     c.stops[i].loc={lat, lng, label:label||'検索した地点'};
     renderCourse(); showFound(_foundPos);
@@ -1958,6 +1985,26 @@ async function _onMapClick(e){
       renderCourse();
       alert(ok?`${t.name} の位置を設定しました`:'端末には保存しましたが、サーバーへの保存に失敗しました。');
     }
+    return;
+  }
+  if(_pickStopUid){
+    const uid=_pickStopUid; _pickStopUid=null;
+    const c=curCourse(); if(!c) return;
+    const i=stopIndexByUid(c, uid); if(i<0) return;
+    const st=c.stops[i];
+    const lat=Number(e.latlng.lat.toFixed(6)), lng=Number(e.latlng.lng.toFixed(6));
+    if(st.type==='post'){
+      const o=(D.offices||[]).find(x=>x && x.name===st.postName);
+      if(o){ o.lat=lat; o.lng=lng; } else (D.offices=D.offices||[]).push({id:Date.now(), name:st.postName, addr:'', lat, lng});
+      await savePosOverride('off:'+st.postName, lat, lng, st.postName);
+      await fbSet('offices', D.offices);
+    } else if(st.custId){
+      const cu=(D.customers||[]).find(x=>String(x.id)===String(st.custId));
+      if(cu){ cu.lat=lat; cu.lng=lng; await savePosOverride('cust:'+cu.id, lat, lng, cu.name); await fbSet('customers', D.customers); }
+      st.loc='cust';
+    }
+    renderCourse();
+    alert('この立ち寄り先の位置を直しました（次回も記憶されます）');
     return;
   }
   if(_pickStopIdx!=null){
@@ -2008,7 +2055,12 @@ function drawMap(c){
     const p=stopPos(st, $('sh-off').value||'');
     if(!p || !p.lat) return;
     pts.push([p.lat,p.lng]);
-    group.push(L.marker([p.lat,p.lng]).bindPopup(`${i+1}. ${p.name}${st.at?'（'+st.at+'）':''}<br>${p.addr||''}`));
+    const selNow=(_pickStopUid===st.uid);
+    const col = selNow ? '#e08b1f' : (st.type==='post' ? '#2f80ed' : st.type==='origin' ? '#009c5a' : '#d9534f');
+    const icon=L.divIcon({className:'', iconSize:[24,24], iconAnchor:[12,12],
+      html:`<div style="width:24px;height:24px;border-radius:50%;background:${col};color:#fff;border:2px solid #fff;
+        box-shadow:0 1px 4px rgba(0,0,0,.5);font-size:12px;font-weight:800;display:flex;align-items:center;justify-content:center;">${i+1}</div>`});
+    group.push(L.marker([p.lat,p.lng], {icon}).bindPopup(`${i+1}. ${p.name}${st.at?'（'+st.at+'）':''}<br>${p.addr||''}`));
   });
   if(c.post){
     const p=officePos(c.post);
@@ -2047,6 +2099,7 @@ window.newCourse=newCourse; window.delCourse=delCourse; window.saveCourses=saveC
 window.setDepart=setDepart; window.setPost=setPost; window.setStop=setStop;
 window.addStop=addStop; window.moveStop=moveStop; window.delStop=delStop;
 window.addPostStop=addPostStop; window.pickPostStopOnMap=pickPostStopOnMap; window.addOriginStop=addOriginStop;
+window.setStopU=setStopU; window.holdStopU=holdStopU; window.moveStopU=moveStopU; window.delStopU=delStopU; window.startFixPos=startFixPos;
 window.saveWeights=saveWeights; window.pickOnMap=pickOnMap;
 window.csDragStart=csDragStart; window.csDragOver=csDragOver; window.csDrop=csDrop; window.csDragEnd=csDragEnd;
 window.shRowDragStart=shRowDragStart; window.shRowDragOver=shRowDragOver; window.shRowDrop=shRowDrop; window.shRowDragEnd=shRowDragEnd;
