@@ -93,7 +93,7 @@
 <header>
   <div>
     <h1>大阪急配　シフト表</h1>
-    <div class="ver" id="app-ver">ver 2026-09-24.42</div>
+    <div class="ver" id="app-ver">ver 2026-09-24.43</div>
   </div>
   <div class="row" style="margin-left:auto;">
     <select id="sh-off" class="fi" style="display:none;"></select>
@@ -168,7 +168,7 @@
         <button class="btn gh" onclick="useFound('stop')">選択中の立ち寄り先に</button>
         <button class="btn gh" onclick="useFound('post')">持込先の郵便局に</button>
       </div>
-      <div class="xs muted" id="map-q-note" style="margin-bottom:6px;"></div>
+      <div class="xs muted" id="map-q-note" style="margin-bottom:6px;">地図をクリックすると赤いピンが置けます。ピンはドラッグで動かせます。</div>
       <div id="cs-map" style="height:420px;border-radius:6px;"></div>
     </div>
   </div>
@@ -184,7 +184,7 @@ document.dispatchEvent(new Event('fb-sdk-ready'));
 
 <script>
 'use strict';
-const APP_VER = '2026-09-24.42';
+const APP_VER = '2026-09-24.43';
 console.log('[シフト表] APP_VER', APP_VER);
 
 const FB_CONFIG = {
@@ -1818,13 +1818,22 @@ async function mapSearch(){
   showFound({lat:pos.lat, lng:pos.lng, label:pos.label||q});
   if(note) note.textContent=`${via?via+' ／ ':''}${pos.src}：${pos.label||q}（地図の赤いピン）`;
 }
-function showFound(p){
+// ★ 2026-09-24.43: 赤いピンはドラッグで動かせる（動かした位置がそのまま使われる）
+function showFound(p, keepView){
   _foundPos=p;
   if(typeof L==='undefined' || !_csMap) return;
   if(_foundMarker){ _csMap.removeLayer(_foundMarker); _foundMarker=null; }
-  _foundMarker=L.circleMarker([p.lat,p.lng], {radius:9, color:'#d9534f', fillColor:'#d9534f', fillOpacity:.7})
-    .addTo(_csMap).bindPopup(p.label||'検索した地点').openPopup();
-  _csMap.setView([p.lat,p.lng], 16);
+  const icon=L.divIcon({className:'', html:'<div style="width:18px;height:18px;border-radius:50%;background:#d9534f;border:3px solid #fff;box-shadow:0 1px 4px rgba(0,0,0,.5);"></div>',
+    iconSize:[18,18], iconAnchor:[9,9]});
+  _foundMarker=L.marker([p.lat,p.lng], {draggable:true, icon})
+    .addTo(_csMap).bindPopup((p.label||'検索した地点')+'<br>ドラッグで動かせます').openPopup();
+  _foundMarker.on('dragend', ev=>{
+    const ll=ev.target.getLatLng();
+    _foundPos={lat:Number(ll.lat.toFixed(6)), lng:Number(ll.lng.toFixed(6)), label:(p.label||'')+'（手で移動）'};
+    const note=$('map-q-note');
+    if(note) note.textContent=`ピンを動かしました（${_foundPos.lat.toFixed(5)}, ${_foundPos.lng.toFixed(5)}）。下のボタンで登録してください。`;
+  });
+  if(!keepView) _csMap.setView([p.lat,p.lng], 17);
 }
 async function useFound(kind){
   if(!_foundPos){ alert('先に検索してください。'); return; }
@@ -1888,7 +1897,13 @@ async function _onMapClick(e){
     alert('この立ち寄り先の場所を地図で指定しました（コースを保存してください）');
     return;
   }
-  if(!_pickCustId) return;
+  if(!_pickCustId){
+    // 対象を選んでいないときは、赤いピンを置くだけ（ドラッグ＆ボタンで登録できる）
+    showFound({lat:Number(e.latlng.lat.toFixed(6)), lng:Number(e.latlng.lng.toFixed(6)), label:'地図で指定した地点'}, true);
+    const note=$('map-q-note');
+    if(note) note.textContent='地図に赤いピンを置きました。ドラッグで微調整して、下のボタンで登録してください。';
+    return;
+  }
   const cu=(D.customers||[]).find(x=>String(x.id)===String(_pickCustId));
   _pickCustId=null;
   if(!cu) return;
