@@ -93,7 +93,7 @@
 <header>
   <div>
     <h1>大阪急配　シフト表</h1>
-    <div class="ver" id="app-ver">ver 2026-09-24.39</div>
+    <div class="ver" id="app-ver">ver 2026-09-24.42</div>
   </div>
   <div class="row" style="margin-left:auto;">
     <select id="sh-off" class="fi" style="display:none;"></select>
@@ -158,7 +158,19 @@
       </div>
     </div>
     <div class="card"><div id="cs-root"></div></div>
-    <div class="card"><div id="cs-map" style="height:420px;border-radius:6px;"></div></div>
+    <div class="card">
+      <div class="row" style="margin-bottom:8px;gap:6px;">
+        <input type="text" id="map-q" class="fi" style="flex:1;min-width:220px;"
+          placeholder="郵便番号・住所・郵便局名で探す（例 599-8247／堺市北区常磐町／都島郵便局）"
+          onkeydown="if(event.key==='Enter'){event.preventDefault();mapSearch();}">
+        <button class="btn gh" onclick="mapSearch()">検索</button>
+        <button class="btn gh" onclick="useFound('origin')">この地点を出発地点に</button>
+        <button class="btn gh" onclick="useFound('stop')">選択中の立ち寄り先に</button>
+        <button class="btn gh" onclick="useFound('post')">持込先の郵便局に</button>
+      </div>
+      <div class="xs muted" id="map-q-note" style="margin-bottom:6px;"></div>
+      <div id="cs-map" style="height:420px;border-radius:6px;"></div>
+    </div>
   </div>
 </div>
 
@@ -172,7 +184,7 @@ document.dispatchEvent(new Event('fb-sdk-ready'));
 
 <script>
 'use strict';
-const APP_VER = '2026-09-24.39';
+const APP_VER = '2026-09-24.42';
 console.log('[シフト表] APP_VER', APP_VER);
 
 const FB_CONFIG = {
@@ -1380,6 +1392,27 @@ async function saveForecast(){
 //   コースは人と切り離した箱。立ち寄り順・指定時刻・郵便局持込を持ち、
 //   直線距離×1.3を道のりの目安として所要時間を積み上げる。
 // ══════════════════════════════════════════════════
+// ★ 2026-09-24.40: 住所から緯度経度を取る（国土地理院 → だめならOSM）
+async function geocodeAddress(addr){
+  const q=String(addr||'').trim();
+  if(!q) return null;
+  try{
+    const r=await fetch('https://msearch.gsi.go.jp/address-search/AddressSearch?q='+encodeURIComponent(q));
+    if(r.ok){
+      const list=await r.json();
+      const c=Array.isArray(list)&&list.length?list[0]?.geometry?.coordinates:null;
+      if(c && c.length>1) return {lat:Number(c[1]), lng:Number(c[0]), src:'国土地理院', label:list[0]?.properties?.title||''};
+    }
+  }catch(e){ console.warn('[住所検索:国土地理院]', e); }
+  try{
+    const r2=await fetch('https://nominatim.openstreetmap.org/search?format=json&limit=1&countrycodes=jp&q='+encodeURIComponent(q));
+    if(r2.ok){
+      const l2=await r2.json();
+      if(Array.isArray(l2) && l2.length) return {lat:Number(l2[0].lat), lng:Number(l2[0].lon), src:'OSM', label:l2[0].display_name||''};
+    }
+  }catch(e){ console.warn('[住所検索:OSM]', e); }
+  return null;
+}
 // ★ 2026-09-24.11: 出発地点の既定（本社）。営業所に位置が無いときはここから計算する
 const DEFAULT_ORIGIN = {name:'本社（堺市北区常磐町3-12-5）', addr:'堺市北区常磐町3-12-5', lat:34.5566, lng:135.4970};
 function originOf(office){
@@ -1518,6 +1551,20 @@ function custPos(id){
   if(!c) return null;
   return {lat:Number(c.lat)||0, lng:Number(c.lng)||0, name:c.name, addr:(c.puSameAsAddr===false&&c.puAddr)?c.puAddr:(c.addr||'')};
 }
+// ★ 2026-09-24.41: 立ち寄り先の場所。既定は顧客の集荷先住所。
+//   本社ロジで積む顧客（ASLAJ・福澤など）は「出発地点（本社）」を選べる。地図で個別に指定もできる。
+function stopPos(st, office){
+  const base=custPos(st.custId);
+  const name=base?base.name:'(位置なし)';
+  if(st.loc==='origin'){
+    const o=originOf(office);
+    return {lat:o.lat, lng:o.lng, name:`${name}（本社ロジ）`, addr:o.addr||''};
+  }
+  if(st.loc && typeof st.loc==='object' && st.loc.lat){
+    return {lat:Number(st.loc.lat), lng:Number(st.loc.lng), name:`${name}（指定）`, addr:st.loc.label||''};
+  }
+  return base;
+}
 function officePos(name){
   const o=(D.offices||[]).find(x=>x && x.name===name);
   if(!o) return null;
@@ -1533,7 +1580,7 @@ function calcCourse(c){
   let prev=start, km=0;
   const rows=[];
   (c.stops||[]).forEach(st=>{
-    const p=custPos(st.custId);
+    const p=stopPos(st, $('sh-off').value||'');
     const d=(prev&&p)?distKm(prev,p)*ROAD_RATIO:0;
     km+=d;
     const move=speed>0?Math.round(d/speed*60):0;
@@ -1592,6 +1639,14 @@ function renderCourse(selId){
   const postNames=[...new Set([...(D.offices||[]).map(o=>o.name), ...POST_DEFAULTS])].filter(Boolean).sort();
   const offOpts=postNames.map(n=>`<option value="${esc(n)}"></option>`).join('');
   root.innerHTML=startWarn+`
+    <div class="row" style="margin-bottom:8px;gap:6px;align-items:center;">
+      <span class="xs muted">出発地点</span>
+      <input type="text" id="cs-origin" class="fi" style="width:260px;"
+        value="${esc((D.settings?.origin?.addr)||DEFAULT_ORIGIN.addr)}" placeholder="住所">
+      <button class="btn gh" onclick="setOrigin()">住所から位置を取得</button>
+      <button class="btn gh" onclick="pickOriginOnMap()">地図で指定</button>
+      <span class="xs muted" id="cs-origin-pos">${startPos.lat?`現在 ${Number(startPos.lat).toFixed(5)}, ${Number(startPos.lng).toFixed(5)}${startPos.name?`（${esc(startPos.name)}）`:''}`:'位置なし'}</span>
+    </div>
     <div class="row" style="margin-bottom:8px;">
       <span class="xs muted">出勤（出発）</span>
       <input type="time" id="cs-depart" class="fi" value="${esc(c.depart||'10:00')}" onchange="setDepart(this.value)">
@@ -1599,13 +1654,14 @@ function renderCourse(selId){
       <input type="text" id="cs-post" class="fi" list="cs-post-list" style="width:180px;"
         value="${esc(c.post||'')}" placeholder="なし（店入れのみ）" onchange="setPost(this.value)">
       <datalist id="cs-post-list">${offOpts}</datalist>
+      ${c.post?`<button class="btn gh" onclick="pickPostOnMap()">持込先を地図で指定</button>`:''}
       <span class="xs muted">所要 <b>${Math.floor(r.totalMin/60)}時間${String(r.totalMin%60).padStart(2,'0')}分</b>　終了 <b>${min2hm(r.endMin)}</b>　走行 約${r.km.toFixed(1)}km</span>
     </div>
     <div class="tw" style="max-height:none;"><table>
-      <thead><tr><th>順</th><th>立ち寄り先</th><th>指定</th><th>到着</th><th>出発</th><th>移動</th><th>待ち</th><th>作業</th><th>距離</th><th></th></tr></thead>
+      <thead><tr><th>順</th><th>立ち寄り先</th><th>場所</th><th>指定</th><th>到着</th><th>出発</th><th>移動</th><th>待ち</th><th>作業</th><th>距離</th><th></th></tr></thead>
       <tbody id="cs-tbody">
         <tr style="background:var(--bg3);">
-          <td></td><td style="text-align:left;">${esc(startPos?startPos.name:'営業所')}（出発）</td><td></td>
+          <td></td><td style="text-align:left;">${esc(startPos?startPos.name:'営業所')}（出発）</td><td></td><td></td>
           <td class="mono">${esc(c.depart||'')}</td><td class="mono">${esc(c.depart||'')}</td>
           <td></td><td></td><td></td><td></td><td></td>
         </tr>
@@ -1616,6 +1672,11 @@ function renderCourse(selId){
             style="cursor:grab;">
           <td title="ドラッグで並べ替え">⠿ ${i+1}</td>
           <td style="text-align:left;">${esc(row.name||'')}${row.noPos?'<span class="xs" style="color:#e06666;">（位置未設定）</span>':''}</td>
+          <td><select class="fi" style="width:auto;font-size:11px;padding:3px 4px;" onchange="setStop(${i},'loc',this.value)">
+            <option value="cust"${(!st.loc||st.loc==='cust')?' selected':''}>集荷先住所</option>
+            <option value="origin"${st.loc==='origin'?' selected':''}>本社ロジ</option>
+            <option value="map"${(st.loc&&typeof st.loc==='object')?' selected':''}>地図で指定</option>
+          </select></td>
           <td><input type="time" class="fi" style="width:96px;" value="${esc(st.at||'')}" onchange="setStop(${i},'at',this.value)"></td>
           <td class="mono">${esc(row.arrive||'')}</td>
           <td class="mono">${esc(row.leave||'')}</td>
@@ -1632,7 +1693,7 @@ function renderCourse(selId){
         </tr>`;
       }).join('')}</tbody>
       ${r.rows.slice((c.stops||[]).length).map(row=>`<tr style="background:var(--bg3);">
-        <td></td><td style="text-align:left;">${esc(row.name)}</td><td></td>
+        <td></td><td style="text-align:left;">${esc(row.name)}</td><td></td><td></td>
         <td class="mono">${esc(row.arrive||'')}</td><td class="mono">${esc(row.leave||'')}</td>
         <td class="mono xs">${row.move||0}分</td><td></td><td class="mono xs">${row.work?row.work+'分':''}</td>
         <td class="mono xs">${(row.km||0).toFixed(1)}km</td><td></td></tr>`).join('')}
@@ -1644,11 +1705,30 @@ function renderCourse(selId){
     </div>`;
   drawMap(c);
 }
+// ★ 2026-09-24.40: 出発地点を住所から設定して保存する
+async function setOrigin(){
+  const addr=$('cs-origin')?.value.trim()||'';
+  if(!addr){ alert('住所を入れてください'); return; }
+  const hint=$('cs-origin-pos'); if(hint) hint.textContent='検索中…';
+  const pos=await geocodeAddress(addr);
+  if(!pos){ if(hint) hint.textContent='位置を取れませんでした'; alert('住所から位置を取れませんでした。番地を省いた住所でも試してみてください。'); return; }
+  const st={...(D.settings||{})};
+  st.origin={addr, lat:pos.lat, lng:pos.lng, name:addr};
+  D.settings=st;
+  const ok=await fbSet('shift_settings', st);
+  renderCourse();
+  alert(ok ? `出発地点を設定しました（${pos.src}：${pos.label||addr}）`
+           : '端末には保存しましたが、サーバーへの保存に失敗しました。');
+}
 function setDepart(v){ const c=curCourse(); if(!c) return; c.depart=v; renderCourse(); }
 function setPost(v){ const c=curCourse(); if(!c) return; c.post=v||null; renderCourse(); }
 function setStop(i, key, v){
   const c=curCourse(); if(!c) return;
   if(key==='work') c.stops[i].work = v===''?null:Number(v);
+  else if(key==='loc'){
+    if(v==='map'){ _pickStopIdx=i; alert('地図の該当地点をクリックしてください（この立ち寄り先の場所として記録します）'); return; }
+    c.stops[i].loc = (v==='origin') ? 'origin' : 'cust';
+  }
   else c.stops[i][key]=v;
   renderCourse();
 }
@@ -1684,12 +1764,130 @@ function moveStop(i, d){
 function delStop(i){ const c=curCourse(); if(!c) return; c.stops.splice(i,1); renderCourse(); }
 // ★ 2026-09-24.6: 地図をクリックして顧客の位置を決める
 let _pickCustId=null;
+let _pickStopIdx=null;
+let _pickTarget=null;   // {kind:'origin'} / {kind:'office', name}
+function pickOriginOnMap(){
+  _pickTarget={kind:'origin'};
+  alert('地図の出発地点をクリックしてください。');
+}
+function pickPostOnMap(){
+  const c=curCourse(); if(!c || !c.post){ alert('先に持込先を選んでください'); return; }
+  _pickTarget={kind:'office', name:c.post};
+  alert(`地図で ${c.post} の位置をクリックしてください。`);
+}
 function pickOnMap(custId){
   _pickCustId=custId;
   const cu=(D.customers||[]).find(x=>String(x.id)===String(custId));
   alert(`${cu?cu.name:''} の位置を決めます。地図の該当地点をクリックしてください。`);
 }
+let _foundPos=null, _foundMarker=null;
+async function zipToAddress(zip){
+  const z=String(zip||'').replace(/[^0-9]/g,'');
+  if(z.length!==7) return null;
+  try{
+    const r=await fetch('https://zipcloud.ibsnet.co.jp/api/search?zipcode='+z);
+    if(!r.ok) return null;
+    const j=await r.json();
+    const a=j&&j.results&&j.results[0];
+    if(!a) return null;
+    return `${a.address1}${a.address2}${a.address3}`;
+  }catch(e){ console.warn('[郵便番号]', e); return null; }
+}
+async function mapSearch(){
+  const qRaw=($('map-q')?.value||'').trim();
+  const note=$('map-q-note');
+  if(!qRaw){ if(note) note.textContent='郵便番号・住所・郵便局名を入れてください'; return; }
+  if(note) note.textContent='検索中…';
+  let q=qRaw, via='';
+  // 郵便番号 → 住所
+  if(/^[0-9]{3}-?[0-9]{4}$/.test(qRaw.replace(/[^0-9-]/g,''))){
+    const a=await zipToAddress(qRaw);
+    if(a){ q=a; via=`郵便番号 ${qRaw} → ${a}`; }
+  } else if(/郵便局|営業所/.test(qRaw)){
+    // 登録済みの郵便局はマスタの住所・位置を使う
+    const o=(D.offices||[]).find(x=>x && x.name && x.name.includes(qRaw.replace(/\s/g,'')));
+    if(o && Number(o.lat)){
+      showFound({lat:Number(o.lat), lng:Number(o.lng), label:`${o.name}（登録済み）`});
+      if(note) note.textContent=`${o.name} の登録位置を表示しました`;
+      return;
+    }
+    if(o && o.addr){ q=o.addr; via=`${o.name} の所在地`; }
+  }
+  const pos=await geocodeAddress(q);
+  if(!pos){ if(note) note.textContent='見つかりませんでした。番地を省いた住所でも試してください。'; return; }
+  showFound({lat:pos.lat, lng:pos.lng, label:pos.label||q});
+  if(note) note.textContent=`${via?via+' ／ ':''}${pos.src}：${pos.label||q}（地図の赤いピン）`;
+}
+function showFound(p){
+  _foundPos=p;
+  if(typeof L==='undefined' || !_csMap) return;
+  if(_foundMarker){ _csMap.removeLayer(_foundMarker); _foundMarker=null; }
+  _foundMarker=L.circleMarker([p.lat,p.lng], {radius:9, color:'#d9534f', fillColor:'#d9534f', fillOpacity:.7})
+    .addTo(_csMap).bindPopup(p.label||'検索した地点').openPopup();
+  _csMap.setView([p.lat,p.lng], 16);
+}
+async function useFound(kind){
+  if(!_foundPos){ alert('先に検索してください。'); return; }
+  const {lat,lng,label}=_foundPos;
+  if(kind==='origin'){
+    const st={...(D.settings||{})};
+    st.origin={...(st.origin||{}), addr:($('cs-origin')?.value.trim()||label||''), lat, lng, name:'出発地点'};
+    D.settings=st;
+    const ok=await fbSet('shift_settings', st);
+    renderCourse(); showFound(_foundPos);
+    alert(ok?'出発地点にしました':'端末には保存しましたが、サーバーへの保存に失敗しました。');
+  } else if(kind==='stop'){
+    const c=curCourse();
+    if(!c || !(c.stops||[]).length){ alert('コースに立ち寄り先がありません。'); return; }
+    const idx=prompt(`何番目の立ち寄り先の場所にしますか？（1〜${c.stops.length}）`, '1');
+    if(idx===null) return;
+    const i=Number(idx)-1;
+    if(!(i>=0 && i<c.stops.length)){ alert('番号が正しくありません'); return; }
+    c.stops[i].loc={lat, lng, label:label||'検索した地点'};
+    renderCourse(); showFound(_foundPos);
+    alert('立ち寄り先の場所にしました（コースを保存してください）');
+  } else if(kind==='post'){
+    const c=curCourse();
+    const name=(c&&c.post) ? c.post : prompt('郵便局名を入れてください（例 都島郵便局）','');
+    if(!name) return;
+    const o=(D.offices||[]).find(x=>x && x.name===name);
+    if(o){ o.lat=lat; o.lng=lng; if(!o.addr) o.addr=label||''; }
+    else (D.offices=D.offices||[]).push({id:Date.now(), name, addr:label||'', lat, lng});
+    const ok=await fbSet('offices', D.offices);
+    renderCourse(); showFound(_foundPos);
+    alert(ok?`${name} の位置にしました`:'端末には保存しましたが、サーバーへの保存に失敗しました。');
+  }
+}
 async function _onMapClick(e){
+  // ★ 2026-09-24.41: 出発地点・郵便局・立ち寄り先の場所を地図で直す
+  if(_pickTarget){
+    const t=_pickTarget; _pickTarget=null;
+    const lat=Number(e.latlng.lat.toFixed(6)), lng=Number(e.latlng.lng.toFixed(6));
+    if(t.kind==='origin'){
+      const st={...(D.settings||{})};
+      st.origin={...(st.origin||{}), addr:($('cs-origin')?.value.trim()||DEFAULT_ORIGIN.addr), lat, lng, name:'出発地点'};
+      D.settings=st;
+      const ok=await fbSet('shift_settings', st);
+      renderCourse();
+      alert(ok?'出発地点を地図で設定しました':'端末には保存しましたが、サーバーへの保存に失敗しました。');
+    } else if(t.kind==='office'){
+      const o=(D.offices||[]).find(x=>x && x.name===t.name);
+      if(o){ o.lat=lat; o.lng=lng; }
+      else (D.offices=D.offices||[]).push({id:Date.now(), name:t.name, addr:'', lat, lng});
+      const ok=await fbSet('offices', D.offices);
+      renderCourse();
+      alert(ok?`${t.name} の位置を設定しました`:'端末には保存しましたが、サーバーへの保存に失敗しました。');
+    }
+    return;
+  }
+  if(_pickStopIdx!=null){
+    const i=_pickStopIdx; _pickStopIdx=null;
+    const c=curCourse(); if(!c) return;
+    c.stops[i].loc={lat:Number(e.latlng.lat.toFixed(6)), lng:Number(e.latlng.lng.toFixed(6)), label:'地図で指定'};
+    renderCourse();
+    alert('この立ち寄り先の場所を地図で指定しました（コースを保存してください）');
+    return;
+  }
   if(!_pickCustId) return;
   const cu=(D.customers||[]).find(x=>String(x.id)===String(_pickCustId));
   _pickCustId=null;
@@ -1706,7 +1904,8 @@ function drawMap(c){
   if(typeof L==='undefined') return;
   const el=$('cs-map'); if(!el) return;
   if(!_csMap){
-    _csMap=L.map(el).setView([34.5731,135.4829], 11);
+    const o=originOf($('sh-off')?.value||'');
+    _csMap=L.map(el).setView([o.lat||34.5731, o.lng||135.4829], 12);
     L.tileLayer('https://tile.openstreetmap.org/{z}/{x}/{y}.png',
       {maxZoom:18, attribution:'© OpenStreetMap'}).addTo(_csMap);
     _csMap.on('click', _onMapClick);
@@ -1719,7 +1918,7 @@ function drawMap(c){
   if(start && start.lat){ pts.push([start.lat,start.lng]);
     group.push(L.marker([start.lat,start.lng]).bindPopup(`${start.name}（営業所）`)); }
   (c.stops||[]).forEach((st,i)=>{
-    const p=custPos(st.custId);
+    const p=stopPos(st, $('sh-off').value||'');
     if(!p || !p.lat) return;
     pts.push([p.lat,p.lng]);
     group.push(L.marker([p.lat,p.lng]).bindPopup(`${i+1}. ${p.name}${st.at?'（'+st.at+'）':''}<br>${p.addr||''}`));
@@ -1766,7 +1965,9 @@ window.shRowDragStart=shRowDragStart; window.shRowDragOver=shRowDragOver; window
 window.hideStaff=hideStaff; window.showStaff=showStaff; window.toggleShowHidden=toggleShowHidden;
 window.saleBarsHTML=saleBarsHTML; window.showHelp=showHelp; window.setTheme=setTheme; window.cellKey=cellKey;
 window.saveDraft=saveDraft; window.saveDowOverride=saveDowOverride; window.clearDowOverride=clearDowOverride;
-window.pickMonth=pickMonth; window.fillAll=fillAll; window.fillRow=fillRow;
+window.pickMonth=pickMonth; window.setOrigin=setOrigin;
+window.pickOriginOnMap=pickOriginOnMap; window.pickPostOnMap=pickPostOnMap;
+window.mapSearch=mapSearch; window.useFound=useFound; window.fillAll=fillAll; window.fillRow=fillRow;
 
 $('sh-off').addEventListener('change', ()=>{ if(confirmLeave()){ _work={}; clearDirty(); render(); } });
 $('sh-mon').addEventListener('change', ()=>{ if(confirmLeave()){ _work={}; clearDirty(); render(); } });
