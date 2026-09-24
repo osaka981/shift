@@ -40,7 +40,11 @@
   table{border-collapse:collapse;font-size:12.5px;width:100%;}
   th,td{border:1px solid var(--brd);padding:5px 4px;text-align:center;white-space:nowrap;}
   thead th{position:sticky;top:0;background:var(--bg3);z-index:2;}
-  tbody td:first-child,thead th:first-child{position:sticky;left:0;background:var(--bg2);text-align:left;z-index:1;}
+  tbody td:first-child,thead th:first-child,tfoot td:first-child{position:sticky;left:0;background:var(--bg2);text-align:left;z-index:3;
+    box-shadow:1px 0 0 var(--brd) inset, -1px 0 0 var(--brd);}
+  tfoot tr{position:sticky;bottom:0;z-index:2;}
+  tfoot td{background:var(--bg3);}
+  @media print{ th,td{border:1px solid #999 !important;} }
   tfoot td{background:var(--bg3);font-weight:700;}
   .cell{cursor:pointer;user-select:none;}
   .al{border-radius:6px;padding:10px 12px;font-size:12px;margin-bottom:10px;}
@@ -83,7 +87,7 @@
 <header>
   <div>
     <h1>大阪急配　シフト表</h1>
-    <div class="ver" id="app-ver">ver 2026-09-24.26</div>
+    <div class="ver" id="app-ver">ver 2026-09-24.27</div>
   </div>
   <div class="row" style="margin-left:auto;">
     <select id="sh-off" class="fi" style="display:none;"></select>
@@ -155,7 +159,7 @@ document.dispatchEvent(new Event('fb-sdk-ready'));
 
 <script>
 'use strict';
-const APP_VER = '2026-09-24.26';
+const APP_VER = '2026-09-24.27';
 console.log('[シフト表] APP_VER', APP_VER);
 
 const FB_CONFIG = {
@@ -522,9 +526,12 @@ function saleLanes(mon){
     const name=shortSaleName(e.name||'セール', media);
     const day=d.getDate();
     const list=(byMedia[media]=byMedia[media]||[]);
-    const hit=list.find(x=>x.name===name && (x.to===day-1 || x.from===day+1 || (day>=x.from&&day<=x.to)));
-    if(hit){ hit.from=Math.min(hit.from,day); hit.to=Math.max(hit.to,day); }
-    else list.push({name, from:day, to:day});
+    // ★ 2026-09-24.27: 同じ媒体で日が続くものは1本にまとめる（名前が少し違っても繋げる）
+    const hit=list.find(x=>x.to===day-1 || x.from===day+1 || (day>=x.from&&day<=x.to));
+    if(hit){
+      hit.from=Math.min(hit.from,day); hit.to=Math.max(hit.to,day);
+      if(!hit.names.includes(name)) hit.names.push(name);
+    } else list.push({name, names:[name], from:day, to:day});
   });
   // 重なるものは段を分ける
   const lanes={};
@@ -557,7 +564,7 @@ function laneRowsHTML(mon, last){
           const maxCh=4;   // 媒体名はすべて同じ長さ（3文字＋…）に揃える
           let lbl=media+(big?'★':'');
           if(lbl.length>maxCh) lbl=lbl.slice(0, Math.max(1,maxCh-1))+'…';
-          tds+=`<th colspan="${span}" title="${esc(media)} ${esc(ev.name)}"
+          tds+=`<th colspan="${span}" title="${esc(media)} ${esc((ev.names||[ev.name]).join(' / '))}"
             style="padding:1px 2px;border-color:transparent;background:transparent;">
             <div style="background:${big?'#d9534f':col};color:#fff;font-size:9.5px;font-weight:${big?'800':'700'};
               white-space:nowrap;overflow:hidden;text-overflow:ellipsis;border-radius:9px;padding:1px 6px;line-height:1.4;
@@ -784,13 +791,13 @@ function dayStripHTML(mon, saleMap){
 
 // ★ 2026-09-24.9: その月のセール予定の一覧（媒体名・セール名が分かるように）
 function saleListHTML(mon, saleMap){
-  // ★ 2026-09-24.26: フリート管理のカレンダーと同じ作り（7列のグリッド・日ごとに小さな札）
+  // ★ 2026-09-24.27: 週ごとのグリッド。期間をまたぐセールは1本のバーでつなぐ
   const [y,m]=mon.split('-').map(Number);
-  const first=new Date(y, m-1, 1), lastD=new Date(y, m, 0);
-  const startDow=first.getDay();            // 0=日
-  const last=lastD.getDate();
-  // 反映日ごとのイベント
-  const byDay={};
+  const first=new Date(y, m-1, 1), last=new Date(y, m, 0).getDate();
+  const startDow=first.getDay();
+  // 反映日ベースの期間（媒体＋名称ごと）
+  const evs=[];
+  const tmp={};
   (D.saleEvents||[]).forEach(e=>{
     if(!e || !e.date) return;
     const base=new Date(String(e.date).replace(/\//g,'-')+'T00:00:00');
@@ -798,33 +805,65 @@ function saleListHTML(mon, saleMap){
     const d=new Date(base.getFullYear(), base.getMonth(), base.getDate()+(Number(e.shiftDays)||0));
     if(`${d.getFullYear()}-${String(d.getMonth()+1).padStart(2,'0')}`!==mon) return;
     const media=inferMedia(e.name, e.media);
-    (byDay[d.getDate()]=byDay[d.getDate()]||[]).push({media, name:shortSaleName(e.name||'セール', media), big:isBigSale(e.name)});
+    const name=shortSaleName(e.name||'セール', media);
+    const key=media+'|'+name;
+    const day=d.getDate();
+    if(tmp[key] && (tmp[key].to===day-1 || (day>=tmp[key].from && day<=tmp[key].to))){
+      tmp[key].to=Math.max(tmp[key].to, day);
+    } else {
+      tmp[key]={media, name, from:day, to:day, big:isBigSale(e.name)};
+      evs.push(tmp[key]);
+    }
   });
-  if(!Object.keys(byDay).length) return '';
-  const dow=['日','月','火','水','木','金','土'];
-  let cells=dow.map((w,i)=>`<div style="padding:6px 4px;text-align:center;font-size:11px;font-weight:700;background:var(--bg3);
-    color:${i===0?'#e06666':i===6?'#6fa8dc':'var(--txt2)'};">${w}</div>`).join('');
-  for(let i=0;i<startDow;i++) cells+='<div style="background:var(--bg);min-height:84px;"></div>';
-  for(let d=1; d<=last; d++){
-    const iso=`${mon}-${String(d).padStart(2,'0')}`;
-    const wd=new Date(iso+'T00:00:00').getDay();
-    const hol=holidayName(iso);
-    const evts=byDay[d]||[];
-    const dayCol=(wd===0||hol)?'#e06666':wd===6?'#6fa8dc':'var(--txt)';
-    const chips=evts.slice(0,4).map(e=>{
-      const c=e.big?'#d9534f':mediaColor(e.media);
-      return `<div title="${esc(e.media)} ${esc(e.name)}" style="font-size:9.5px;line-height:1.3;padding:1px 4px;margin-top:2px;
-        border-radius:4px;border-left:3px solid ${c};background:${c}22;color:var(--txt);
-        overflow:hidden;text-overflow:ellipsis;white-space:nowrap;">${esc(e.media)} ${esc(e.name)}</div>`;
-    }).join('') + (evts.length>4?`<div style="font-size:9px;color:var(--txt2);text-align:center;margin-top:1px;">+${evts.length-4}</div>`:'');
-    cells+=`<div style="background:var(--bg2);min-height:84px;padding:4px 5px;overflow:hidden;">
-      <div style="font-size:11.5px;font-weight:700;color:${dayCol};">${d}${hol?`<span class="xs" style="color:#e06666;"> ${esc(hol)}</span>`:''}</div>
-      ${chips}</div>`;
-  }
+  if(!evs.length) return '';
+  const dowL=['日','月','火','水','木','金','土'];
+  const weeks=[];
+  for(let d=1-startDow; d<=last; d+=7) weeks.push(d);
+  const head=`<div style="display:grid;grid-template-columns:repeat(7,1fr);gap:1px;background:var(--brd);">
+    ${dowL.map((w,i)=>`<div style="padding:6px 4px;text-align:center;font-size:11px;font-weight:700;background:var(--bg3);
+      color:${i===0?'#e06666':i===6?'#6fa8dc':'var(--txt2)'};">${w}</div>`).join('')}</div>`;
+  const body=weeks.map(ws=>{
+    // 日付の行
+    let days='';
+    for(let i=0;i<7;i++){
+      const d=ws+i;
+      if(d<1||d>last){ days+='<div style="background:var(--bg);min-height:26px;"></div>'; continue; }
+      const iso=`${mon}-${String(d).padStart(2,'0')}`;
+      const wd=new Date(iso+'T00:00:00').getDay();
+      const hol=holidayName(iso);
+      const col=(wd===0||hol)?'#e06666':wd===6?'#6fa8dc':'var(--txt)';
+      const bg=(wd===0||hol)?'rgba(224,102,102,.08)':wd===6?'rgba(111,168,220,.08)':'var(--bg2)';
+      days+=`<div style="background:${bg};padding:4px 6px;min-height:26px;font-size:11.5px;font-weight:700;color:${col};">
+        ${d}${hol?`<span class="xs" style="color:#e06666;"> ${esc(hol)}</span>`:''}</div>`;
+    }
+    // その週に掛かる期間を段に積む
+    const wk=evs.filter(e=>e.to>=ws && e.from<=ws+6)
+      .map(e=>({...e, s:Math.max(e.from, ws), t:Math.min(e.to, ws+6)}))
+      .sort((a,b)=>a.s-b.s || (b.t-b.s)-(a.t-a.s));
+    const rows=[];
+    wk.forEach(e=>{ let r=rows.find(r=>r.every(x=>e.s>x.t || e.t<x.s)); if(!r){ r=[]; rows.push(r); } r.push(e); });
+    const bars=rows.map(row=>{
+      let cells='';
+      row.sort((a,b)=>a.s-b.s).forEach(e=>{
+        const startCol=(e.s-ws)+1, span=e.t-e.s+1;
+        const c=e.big?'#d9534f':mediaColor(e.media);
+        const cont=e.from<e.s?'〜':'';
+        cells+=`<div style="grid-column:${startCol} / span ${span};background:${c};color:#fff;border-radius:9px;
+          font-size:10.5px;font-weight:${e.big?'800':'700'};padding:2px 8px;margin:1px 2px;
+          white-space:nowrap;overflow:hidden;text-overflow:ellipsis;" title="${esc(e.media)} ${esc(e.name)}">
+          ${cont}${esc(e.media)} ${esc(e.name)}</div>`;
+      });
+      return `<div style="display:grid;grid-template-columns:repeat(7,1fr);">${cells}</div>`;
+    }).join('');
+    return `<div style="border-bottom:1px solid var(--brd);padding-bottom:4px;margin-bottom:4px;">
+      <div style="display:grid;grid-template-columns:repeat(7,1fr);gap:1px;background:var(--brd);">${days}</div>
+      ${bars}
+      ${bars?'':'<div style="height:20px;"></div>'}
+    </div>`;
+  }).join('');
   return `<div style="margin-top:14px;">
     <div class="xs fw7" style="margin-bottom:6px;">${y}年${m}月のセール予定（★は大型セール）</div>
-    <div style="display:grid;grid-template-columns:repeat(7,1fr);gap:1px;background:var(--brd);
-      border:1px solid var(--brd);border-radius:10px;overflow:hidden;">${cells}</div>
+    <div style="border:1px solid var(--brd);border-radius:10px;overflow:hidden;padding:0 0 4px;">${head}${body}</div>
   </div>`;
 }
 
