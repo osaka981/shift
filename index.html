@@ -93,7 +93,7 @@
 <header>
   <div>
     <h1>大阪急配　シフト表</h1>
-    <div class="ver" id="app-ver">ver 2026-09-24.33</div>
+    <div class="ver" id="app-ver">ver 2026-09-24.34</div>
   </div>
   <div class="row" style="margin-left:auto;">
     <select id="sh-off" class="fi" style="display:none;"></select>
@@ -124,6 +124,10 @@
       </div>
       <div class="xs muted" id="fc-ly"></div>
       <button class="btn gh" onclick="applyYoy()">昨対から計算</button>
+      <div>
+        <div class="xs muted">曜日の参照月（例 2026-07,2026-08）</div>
+        <input type="text" id="fc-dowsrc" class="fi" style="width:190px;" placeholder="空欄なら直近6か月">
+      </div>
       <button class="btn grn" onclick="saveForecast()">予測を保存</button>
       <label class="btn gh" style="display:inline-block;">セールCSVを読み込む
         <input type="file" id="fc-csv" accept=".csv,text/csv" style="display:none;" onchange="importSaleCsv(this)">
@@ -167,7 +171,7 @@ document.dispatchEvent(new Event('fb-sdk-ready'));
 
 <script>
 'use strict';
-const APP_VER = '2026-09-24.33';
+const APP_VER = '2026-09-24.34';
 console.log('[シフト表] APP_VER', APP_VER);
 
 const FB_CONFIG = {
@@ -406,6 +410,7 @@ async function shRowDrop(e, toKey){
   await saveStaffPrefs(office, keys, null);
 }
 // 直近6か月の平均持出（実績2か月以内・実績なしは新人80個）
+// ★ 2026-09-24.34: 平均に加えて「期間内の最大持出トップ5の平均」も出す
 function avgMochidashi(st, mon){
   const base=new Date((mon||new Date().toISOString().slice(0,7))+'-01');
   const from=new Date(base.getFullYear(), base.getMonth()-6, 1);
@@ -414,12 +419,15 @@ function avgMochidashi(st, mon){
     const d=new Date(String(r.date||'').replace(/\//g,'-')+'T00:00:00');
     return !isNaN(d) && d>=from && d<base;
   });
-  if(!rows.length) return {avg:80, isNew:true};
+  if(!rows.length) return {avg:80, max5:80, isNew:true};
   const months=new Set(rows.map(r=>String(r.date).slice(0,7))).size;
-  if(months<=2) return {avg:80, isNew:true};
-  const tot=rows.reduce((a,r)=>a+(Number(r.mochidashi)||0),0);
-  const avg=Math.round(tot/rows.length);
-  return {avg: avg>0?avg:80, isNew: avg<=0};
+  if(months<=2) return {avg:80, max5:80, isNew:true};
+  const qty=rows.map(r=>Number(r.mochidashi)||0).filter(v=>v>0).sort((a,b)=>b-a);
+  if(!qty.length) return {avg:80, max5:80, isNew:true};
+  const avg=Math.round(qty.reduce((a,b)=>a+b,0)/qty.length);
+  const top=qty.slice(0, Math.min(5, qty.length));
+  const max5=Math.round(top.reduce((a,b)=>a+b,0)/top.length);
+  return {avg: avg>0?avg:80, max5: max5>0?max5:80, isNew:false};
 }
 let _filling=false;
 // ══ 第2段階：日別の予測と過不足 ══
@@ -438,10 +446,22 @@ function dailyTotals(office, fromYm, toYm){
   return map;
 }
 // 曜日係数（直近6か月の実績から。実績が無ければ全曜日1）
+// ★ 2026-09-24.34: 曜日係数は参照月を指定できる
+function dowSrcOf(office){ return (D.settings?.dowSrc||{})[office] || ''; }
 function dowFactors(office, mon){
-  const base=new Date(mon+'-01');
-  const from=new Date(base.getFullYear(), base.getMonth()-6, 1).toISOString().slice(0,7);
-  const map=dailyTotals(office, from, mon);
+  const src=dowSrcOf(office).split(',').map(x=>_ymNorm(x.trim())).filter(x=>/^\d{4}-\d{2}$/.test(x));
+  let map={};
+  if(src.length){
+    src.forEach(ym=>{
+      const [yy,mm]=ym.split('-').map(Number);
+      const next = mm===12 ? `${yy+1}-01` : `${yy}-${String(mm+1).padStart(2,'0')}`;
+      Object.assign(map, dailyTotals(office, ym, next));
+    });
+  } else {
+    const base=new Date(mon+'-01');
+    const from=new Date(base.getFullYear(), base.getMonth()-6, 1).toISOString().slice(0,7);
+    map=dailyTotals(office, from, mon);
+  }
   const sum=[0,0,0,0,0,0,0], cnt=[0,0,0,0,0,0,0];
   Object.entries(map).forEach(([d,v])=>{
     if(!v) return;
@@ -450,9 +470,9 @@ function dowFactors(office, mon){
   });
   const avg=sum.map((s,i)=>cnt[i]?s/cnt[i]:0);
   const used=avg.filter(v=>v>0);
-  if(!used.length) return {f:[1,1,1,1,1,1,1], hasData:false};
+  if(!used.length) return {f:[1,1,1,1,1,1,1], hasData:false, src:src};
   const mean=used.reduce((a,b)=>a+b,0)/used.length;
-  return {f:avg.map(v=>v>0?v/mean:0), hasData:true};
+  return {f:avg.map(v=>v>0?v/mean:0), hasData:true, src:src};
 }
 // 前年同月の実績合計
 function lastYearTotal(office, mon){
@@ -626,7 +646,7 @@ function render(){
     const col=(dow===0||hol)?'color:#e06666;':dow===6?'color:#6fa8dc;':'';
     head+=`<th title="${esc(hol)}" style="${col}${colBg[d]}overflow:hidden;">${d}<div class="xs" style="${col}">${W[dow]}</div></th>`;
   }
-  head+='<th>休</th><th class="num">平均持出</th></tr>';
+  head+='<th>休</th><th class="num">平均持出</th><th class="num">最大平均</th></tr>';
   let body='';
   staff.forEach(st=>{
     const av=avgMochidashi(st, mon);
@@ -660,6 +680,7 @@ function render(){
       ${tds}
       <td class="off">${off}</td>
       <td class="num">${av.avg}${av.isNew?'<div class="xs" style="color:var(--amb)">新人</div>':''}</td>
+      <td class="num">${av.max5}</td>
     </tr>`;
   });
   // 予測（月合計を曜日係数で配分）
@@ -674,29 +695,47 @@ function render(){
     staff.forEach(st=>{ n += cellWeight(cellGet(data.cells, st, d, work), wgt); });
     foot+=`<td class="people" data-d="${d}" style="${colBg[d]}">${n?Math.round(n*10)/10:''}</td>`;
   }
-  foot+='<td></td><td class="num"></td></tr>';
+  foot+='<td></td><td class="num"></td><td class="num"></td></tr>';
   if(total){
     // 能力＝その日の（平均持出×重み）の合計
-    const avgMap={}; staff.forEach(st=>{ avgMap[st.id]=avgMochidashi(st, mon).avg; });
-    let r1='<tr><td class="num">予測（個）</td>', r2='<tr><td class="num">対応できる数</td>', r3='<tr><td class="num">過不足</td>';
+    const avgMap={}, maxMap={};
+    staff.forEach(st=>{ const a=avgMochidashi(st, mon); avgMap[st.id]=a.avg; maxMap[st.id]=a.max5; });
+    let r1='<tr><td class="num">予測（個）</td>', r2='<tr><td class="num">対応（平均）</td>',
+        r2b='<tr><td class="num">対応（最大平均）</td>', r3='<tr><td class="num">過不足（平均）</td>',
+        r3b='<tr><td class="num">過不足（最大）</td>';
+    let sumCap=0, sumCapMax=0;
     for(let d=1; d<=last; d++){
-      let cap=0;
-      staff.forEach(st=>{ cap += (avgMap[st.id]||0) * cellWeight(cellGet(data.cells, st, d, work), wgt); });
-      cap=Math.round(cap);
+      let cap=0, capMax=0;
+      staff.forEach(st=>{
+        const wv=cellWeight(cellGet(data.cells, st, d, work), wgt);
+        cap += (avgMap[st.id]||0)*wv;
+        capMax += (maxMap[st.id]||0)*wv;
+      });
+      cap=Math.round(cap); capMax=Math.round(capMax);
+      sumCap+=cap; sumCapMax+=capMax;
       const need=plan[d-1]||0;
-      const diff=cap-need;
-      const col = diff<0 ? 'color:#e06666;font-weight:700;' : 'color:#6fa8dc;font-weight:700;';
-      r1+=`<td class="num">${need||''}</td>`;
+      const diff=cap-need, diffMax=capMax-need;
+      const c1 = diff<0 ? 'color:#e06666;font-weight:700;' : 'color:#6fa8dc;font-weight:700;';
+      const c2 = diffMax<0 ? 'color:#e06666;font-weight:700;' : 'color:#6fa8dc;font-weight:700;';
+      const inRange = need && need>=cap && need<=capMax;
+      r1+=`<td class="num" style="${inRange?'color:#e08b1f;font-weight:700;':''}">${need||''}</td>`;
       r2+=`<td class="num">${cap||''}</td>`;
-      r3+=`<td class="num" style="${need?col:''}">${need?(diff>0?'+':'')+diff:''}</td>`;
+      r2b+=`<td class="num">${capMax||''}</td>`;
+      r3+=`<td class="num" style="${need?c1:''}">${need?(diff>0?'+':'')+diff:''}</td>`;
+      r3b+=`<td class="num" style="${need?c2:''}">${need?(diffMax>0?'+':'')+diffMax:''}</td>`;
     }
     const sumPlan=plan.reduce((a,b)=>a+b,0);
-    r1+=`<td></td><td class="num">${sumPlan}</td></tr>`;
-    r2+='<td></td><td class="num"></td></tr>'; r3+='<td></td><td class="num"></td></tr>';
-    foot+=r1+r2+r3;
+    r1+=`<td></td><td class="num">${sumPlan.toLocaleString()}</td><td class="num"></td></tr>`;
+    r2+=`<td></td><td class="num">${sumCap.toLocaleString()}</td><td class="num"></td></tr>`;
+    r2b+=`<td></td><td class="num"></td><td class="num">${sumCapMax.toLocaleString()}</td></tr>`;
+    r3+='<td></td><td class="num"></td><td class="num"></td></tr>';
+    r3b+='<td></td><td class="num"></td><td class="num"></td></tr>';
+    foot+=r1+r2+r2b+r3+r3b;
   }
   root.innerHTML=`
-    ${total?`<div class="xs muted" style="margin-bottom:6px;">予測は月合計 ${total.toLocaleString()}個を曜日係数で配分しています${dw.hasData?'（直近6か月の実績から算出）':'（実績が足りないため全曜日を同じ比率にしています）'}。赤字は人手不足、青字は余力です。</div>`:''}
+    ${total?`<div class="xs muted" style="margin-bottom:6px;">予測は月合計 ${total.toLocaleString()}個を曜日係数で配分
+      ${dw.hasData?(dw.src&&dw.src.length?`（参照月 ${dw.src.join('・')} の実績）`:'（直近6か月の実績）'):'（実績が足りないため全曜日を同じ比率）'}。
+      「対応（平均）」〜「対応（最大平均）」の幅に予測が収まっていれば足りている目安（橙字）。過不足の赤字は不足、青字は余力です。</div>`:''}
     ${colMode?'<div class="xs muted" style="margin-bottom:6px;">ますをタップすると、その日に回るコースを選べます。コースは「集荷コース」で作ります。</div>':''}
     <div class="xs muted" id="sh-scroll-hint" style="margin-bottom:4px;display:none;">表は横にスクロールできます。氏名の列は固定されます。</div>
     <div class="tw"><table id="sh-table" style="table-layout:fixed;width:${NAME_W+OFF_W+AVG_W+last*window._shColW}px;font-size:13px;">
@@ -1205,6 +1244,7 @@ function refreshForecastInputs(){
   if($('fc-yoy')) $('fc-yoy').value = fc.yoy||'';
   const ly=lastYearTotal(office, mon);
   if($('fc-ly')) $('fc-ly').textContent = ly ? `前年同月の実績 ${ly.toLocaleString()}個` : '前年同月の実績なし（合計を手で入れてください）';
+  if($('fc-dowsrc')) $('fc-dowsrc').value = dowSrcOf(office);
   if($('fc-note')) $('fc-note').textContent = fc.updatedAt ? `予測の更新 ${new Date(fc.updatedAt).toLocaleString('ja-JP')}` : '';
 }
 function applyYoy(){
@@ -1218,6 +1258,13 @@ function applyYoy(){
 async function saveForecast(){
   const office=$('sh-off').value||'', mon=_ymNorm($('sh-mon').value||'');
   if(!office||!mon) return;
+  {
+    const v=$('fc-dowsrc')?.value.trim()||'';
+    const st={...(D.settings||{})};
+    st.dowSrc={...(st.dowSrc||{}), [office]:v};
+    D.settings=st;
+    await fbSet('shift_settings', st);
+  }
   const all={...(D.shifts||{})};
   const cur=all[shKey(office,mon)]||{office, mon, cells:{}};
   cur.forecast={ total:Number($('fc-total').value)||0, yoy:Number($('fc-yoy').value)||0, updatedAt:new Date().toISOString() };
