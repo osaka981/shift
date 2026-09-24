@@ -93,7 +93,7 @@
 <header>
   <div>
     <h1>大阪急配　シフト表</h1>
-    <div class="ver" id="app-ver">ver 2026-09-24.31</div>
+    <div class="ver" id="app-ver">ver 2026-09-24.32</div>
   </div>
   <div class="row" style="margin-left:auto;">
     <select id="sh-off" class="fi" style="display:none;"></select>
@@ -167,7 +167,7 @@ document.dispatchEvent(new Event('fb-sdk-ready'));
 
 <script>
 'use strict';
-const APP_VER = '2026-09-24.31';
+const APP_VER = '2026-09-24.32';
 console.log('[シフト表] APP_VER', APP_VER);
 
 const FB_CONFIG = {
@@ -320,9 +320,12 @@ function delOffices(){
 // ★ 2026-09-24.5: セルのキーは社員番号。日報アプリ側も社員番号で見るため。
 //   以前保存した「従業員IDのキー」も読み込めるようにする。
 function cellKeyOf(st, d){ return `${st.empNo||st.id}|${d}`; }
-function cellGet(cells, st, d){
+function cellGet(cells, st, d, work){
+  const k=cellKeyOf(st,d), k2=`${st.id}|${d}`;
+  if(work && (k in work)) return work[k];
+  if(work && (k2 in work)) return work[k2];
   if(!cells) return '';
-  return cells[cellKeyOf(st,d)] ?? cells[`${st.id}|${d}`] ?? '';
+  return cells[k] ?? cells[k2] ?? '';
 }
 function isColOffice(name){
   const dep=(D.departments||[]).find(x=>x && x.type==='col');
@@ -603,6 +606,7 @@ function render(){
     window._shColW=Math.max(34, Math.floor((avail-NAME_W-OFF_W-AVG_W)/last));
   }
   const data=shGet(office, mon);
+  const work=workCells(office, mon);      // 入力中の内容
   const wgt=weights();
   const colMode=isColOffice(office);   // ★ 2026-09-24.5: 集荷はコース名を入れる
   const colBg=[];
@@ -629,7 +633,7 @@ function render(){
     let off=0, tds='';
     for(let d=1; d<=last; d++){
       const key=cellKeyOf(st, d);
-      const v=cellGet(data.cells, st, d);
+      const v=cellGet(data.cells, st, d, work);
       if(v==='×') off++;
       tds+=`<td class="cell" tabindex="0" data-k="${key}" data-d="${d}" data-v="${v}" data-bg="${colBg[d]}"
         onclick="${colMode?`pickCourse(this)`:`cycle(this)`}" onkeydown="cellKey(event,this)"
@@ -667,7 +671,7 @@ function render(){
   let foot='<tr><td>人数</td>';
   for(let d=1; d<=last; d++){
     let n=0;
-    staff.forEach(st=>{ n += cellWeight(cellGet(data.cells, st, d), wgt); });
+    staff.forEach(st=>{ n += cellWeight(cellGet(data.cells, st, d, work), wgt); });
     foot+=`<td class="people" data-d="${d}" style="${colBg[d]}">${n?Math.round(n*10)/10:''}</td>`;
   }
   foot+='<td></td><td class="num"></td></tr>';
@@ -677,7 +681,7 @@ function render(){
     let r1='<tr><td class="num">予測（個）</td>', r2='<tr><td class="num">対応できる数</td>', r3='<tr><td class="num">過不足</td>';
     for(let d=1; d<=last; d++){
       let cap=0;
-      staff.forEach(st=>{ cap += (avgMap[st.id]||0) * cellWeight(cellGet(data.cells, st, d), wgt); });
+      staff.forEach(st=>{ cap += (avgMap[st.id]||0) * cellWeight(cellGet(data.cells, st, d, work), wgt); });
       cap=Math.round(cap);
       const need=plan[d-1]||0;
       const diff=cap-need;
@@ -882,7 +886,7 @@ function courseSummaryHTML(office, mon, data){
   const [y,m]=mon.split('-').map(Number);
   const last=new Date(y,m,0).getDate();
   const used={};
-  Object.values(data.cells||{}).forEach(v=>{ if(String(v).startsWith('C:')) used[String(v).slice(2)]=(used[String(v).slice(2)]||0)+1; });
+  Object.values({...(data.cells||{}), ...workCells(office, mon)}).forEach(v=>{ if(String(v).startsWith('C:')) used[String(v).slice(2)]=(used[String(v).slice(2)]||0)+1; });
   const rows=list.map(c=>{
     const r=calcCourse(c);
     return `<tr>
@@ -939,6 +943,7 @@ function pickCourse(td){
   const items=[{value:'',label:'（空にする）'},{value:'×',label:'休み（×）'},
     ...list.map(c=>({value:'C:'+c.id, label:c.name}))];
   openPickMenu(td, items, v=>{
+    setWork(td.dataset.k, v);
     td.dataset.v=v;
     td.innerHTML=cellLabel(office, v);
     td.setAttribute('style', (td.dataset.bg||'')+cellStyle(v));
@@ -1000,12 +1005,14 @@ function cycle(td){
   else if(cur==='〇'){ next='×'; }
   else {
     openPickMenu(td, SHIFT_PICK.map(([v,l])=>({value:v, label:l})), v=>{
+      setWork(td.dataset.k, v);
       td.dataset.v=v; td.textContent=SHIFT_LABEL[v]||'';
       td.setAttribute('style', (td.dataset.bg||'')+cellStyle(v));
       markDirty(); recalc();
     });
     return;
   }
+  setWork(td.dataset.k, next);
   td.dataset.v=next; td.textContent=SHIFT_LABEL[next]||'';
   td.setAttribute('style', (td.dataset.bg||'')+cellStyle(next));
   markDirty(); recalc();
@@ -1028,6 +1035,7 @@ function recalc(){
 }
 // ★ 2026-09-24.14: まとめて入れる・消す
 function _applyCell(td, v){
+  setWork(td.dataset.k, v);
   td.dataset.v=v;
   td.innerHTML=cellLabel($('sh-off').value||'', v);
   td.setAttribute('style', (td.dataset.bg||'')+cellStyle(v));
@@ -1067,6 +1075,7 @@ function weekly(){
       const d=Number(String(td.dataset.k).split('|')[1]);
       const dow=new Date(`${mon}-${String(d).padStart(2,'0')}T00:00:00`).getDay();
       if(!dows.includes(dow)) return;
+      setWork(td.dataset.k, c);
       td.dataset.v=c; td.textContent=SHIFT_LABEL[c]||'';
       td.setAttribute('style', (td.dataset.bg||'')+cellStyle(c));
       markDirty();
@@ -1085,6 +1094,7 @@ async function save(){
   all[shKey(office,mon)]={office, mon, cells, updatedAt:new Date().toISOString()};
   D.shifts=all;
   const ok=await fbSet('shifts', all);
+  clearWork(office, mon);
   clearDirty();
   render();
   alert(ok ? `${office} ${mon} のシフトを保存しました` : '端末には保存しましたが、サーバーへの保存に失敗しました。通信を確認してください。');
@@ -1242,6 +1252,16 @@ function initTheme(){
   try{ t=localStorage.getItem('shift_theme'); }catch(e){}
   if(t) setTheme(t);
 }
+// ★ 2026-09-24.32: 入力中の内容を保持する（画面の作り直しでも消えない）
+let _work={};
+function workKey(){ return shKey($('sh-off')?.value||'', _ymNorm($('sh-mon')?.value||'')); }
+function setWork(k, v){
+  const wk=workKey();
+  _work[wk]=_work[wk]||{};
+  _work[wk][k]=v;
+}
+function workCells(office, mon){ return _work[shKey(office,mon)]||{}; }
+function clearWork(office, mon){ delete _work[shKey(office,mon)]; }
 // ★ 2026-09-24.30: 保存していない入力を守る
 let _dirty=false;
 function markDirty(){ _dirty=true; const el=$('sh-dirty'); if(el) el.textContent='未保存の入力があります'; }
@@ -1273,7 +1293,7 @@ function renderOffTabs(){
 }
 function pickOffice(name){
   if(!confirmLeave()) return;
-  clearDirty();
+  _work={}; clearDirty();
   const sel=$('sh-off');
   if(sel && ![...sel.options].some(o=>o.value===name)){
     const op=document.createElement('option'); op.value=name; op.textContent=name; sel.appendChild(op);
@@ -1572,8 +1592,8 @@ window.shRowDragStart=shRowDragStart; window.shRowDragOver=shRowDragOver; window
 window.hideStaff=hideStaff; window.showStaff=showStaff; window.toggleShowHidden=toggleShowHidden;
 window.saleBarsHTML=saleBarsHTML; window.showHelp=showHelp; window.setTheme=setTheme; window.cellKey=cellKey; window.fillAll=fillAll; window.fillRow=fillRow;
 
-$('sh-off').addEventListener('change', ()=>{ if(confirmLeave()){ clearDirty(); render(); } });
-$('sh-mon').addEventListener('change', ()=>{ if(confirmLeave()){ clearDirty(); render(); } });
+$('sh-off').addEventListener('change', ()=>{ if(confirmLeave()){ _work={}; clearDirty(); render(); } });
+$('sh-mon').addEventListener('change', ()=>{ if(confirmLeave()){ _work={}; clearDirty(); render(); } });
 let _resizeT=null;
 window.addEventListener('resize', ()=>{
   clearTimeout(_resizeT);
