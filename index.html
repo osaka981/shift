@@ -93,7 +93,7 @@
 <header>
   <div>
     <h1>大阪急配　シフト表</h1>
-    <div class="ver" id="app-ver">ver 2026-09-24.35</div>
+    <div class="ver" id="app-ver">ver 2026-09-24.36</div>
   </div>
   <div class="row" style="margin-left:auto;">
     <select id="sh-off" class="fi" style="display:none;"></select>
@@ -171,7 +171,7 @@ document.dispatchEvent(new Event('fb-sdk-ready'));
 
 <script>
 'use strict';
-const APP_VER = '2026-09-24.35';
+const APP_VER = '2026-09-24.36';
 console.log('[シフト表] APP_VER', APP_VER);
 
 const FB_CONFIG = {
@@ -229,7 +229,9 @@ async function initFirebase(){
     onValue(ref(fbDB, 'nikki/'+node), snap=>{
       if(!snap.exists()) return;
       const v=snap.val();
-      D[key] = Array.isArray(v) ? v : (key==='shifts' ? (v||{}) : (v ? Object.values(v) : []));
+      // ★ 2026-09-24.36: shifts・drafts・settings はキー付きの箱なので、そのまま入れる
+      const asObject = (key==='shifts' || key==='drafts' || key==='settings');
+      D[key] = Array.isArray(v) ? v : (asObject ? (v||{}) : (v ? Object.values(v) : []));
       lsSet('nikki_'+node, D[key]);
       if(cb) cb();
     }, err=>console.warn('['+node+']', err && err.message));
