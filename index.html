@@ -83,7 +83,7 @@
 <header>
   <div>
     <h1>大阪急配　シフト表</h1>
-    <div class="ver" id="app-ver">ver 2026-09-24.24</div>
+    <div class="ver" id="app-ver">ver 2026-09-24.25</div>
   </div>
   <div class="row" style="margin-left:auto;">
     <select id="sh-off" class="fi" style="display:none;"></select>
@@ -155,7 +155,7 @@ document.dispatchEvent(new Event('fb-sdk-ready'));
 
 <script>
 'use strict';
-const APP_VER = '2026-09-24.24';
+const APP_VER = '2026-09-24.25';
 console.log('[シフト表] APP_VER', APP_VER);
 
 const FB_CONFIG = {
@@ -686,7 +686,7 @@ function render(){
       </colgroup>
       <thead>${head}</thead><tbody>${body}</tbody><tfoot>${foot}</tfoot></table></div>
     ${holidayNoteHTML(mon, last)}
-    ${saleListHTML(mon, saleMap)}
+    ${'' /* ★ 2026-09-24.25: セール予定カレンダーは作り直しのため一旦外す */}
     ${colMode?courseSummaryHTML(office, mon, data):''}
     ${weightsHTML(colMode)}
     <div class="row" style="justify-content:flex-end;margin-top:10px;">
