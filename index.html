@@ -81,7 +81,7 @@
 <header>
   <div>
     <h1>大阪急配　シフト表</h1>
-    <div class="ver" id="app-ver">ver 2026-09-24.13</div>
+    <div class="ver" id="app-ver">ver 2026-09-24.14</div>
   </div>
   <div class="row" style="margin-left:auto;">
     <select id="sh-off" class="fi" style="display:none;"></select>
@@ -151,7 +151,7 @@ document.dispatchEvent(new Event('fb-sdk-ready'));
 
 <script>
 'use strict';
-const APP_VER = '2026-09-24.13';
+const APP_VER = '2026-09-24.14';
 console.log('[シフト表] APP_VER', APP_VER);
 
 const FB_CONFIG = {
@@ -510,7 +510,11 @@ function render(){
             ondragstart="shRowDragStart(event,'${_k}')" ondragend="shRowDragEnd(event)"
             style="cursor:grab;padding:0 2px;">⠿</span>
           <div>${esc(st.name)}<div class="xs muted mono">${esc(st.empNo||'')}</div></div>
-          <button type="button" draggable="false" class="btn gh" style="margin-left:auto;padding:2px 6px;font-size:10px;"
+          <button type="button" draggable="false" class="btn gh" style="margin-left:auto;padding:2px 5px;font-size:10px;"
+            title="${colMode?'集荷はコースを選ぶため使いません':'この人をすべて〇にする'}" ${colMode?'disabled style="opacity:.4;padding:2px 5px;font-size:10px;"':''} onclick="event.stopPropagation();fillRow('${_k}','〇')">〇</button>
+          <button type="button" draggable="false" class="btn gh" style="padding:2px 5px;font-size:10px;"
+            title="この人をすべて削除する" onclick="event.stopPropagation();fillRow('${_k}','')">消</button>
+          <button type="button" draggable="false" class="btn gh" style="padding:2px 6px;font-size:10px;"
             onclick="event.stopPropagation();${_isHid?`showStaff('${esc(office)}','${_k}')`:`hideStaff('${esc(office)}','${_k}')`}">${_isHid?'表示':'非表示'}</button>
         </div>
       </td>
@@ -572,6 +576,8 @@ function render(){
     ${weightsHTML(colMode)}
     <div class="row" style="justify-content:flex-end;margin-top:10px;">
       <span class="xs muted" style="margin-right:auto;">${data.updatedAt?`最終更新 ${new Date(data.updatedAt).toLocaleString('ja-JP')}`:'未保存'}</span>
+      ${colMode?'':'<button class="btn gh" onclick="fillAll(\'〇\')">全員すべて〇</button>'}
+      <button class="btn gh" onclick="fillAll('')">全員すべて削除</button>
       <button class="btn gh" onclick="weekly()">曜日で一括設定</button>
       <button class="btn gh" onclick="printSheet()">印刷（数量なし）</button>
       <button class="btn grn" onclick="save()">シフトを保存</button>
@@ -768,6 +774,25 @@ function recalc(){
     });
     td.textContent = n ? Math.round(n*10)/10 : '';
   });
+}
+// ★ 2026-09-24.14: まとめて入れる・消す
+function _applyCell(td, v){
+  td.dataset.v=v;
+  td.innerHTML=cellLabel($('sh-off').value||'', v);
+  td.setAttribute('style', cellStyle(v));
+}
+function fillAll(v){
+  const label = v==='〇' ? '全員のすべての日を〇にします。' : '全員のすべての日を空にします。';
+  if(!confirm(`${label}\nよろしいですか？（保存するまで元に戻せます）`)) return;
+  document.querySelectorAll('#sh-table .cell').forEach(td=>_applyCell(td, v));
+  recalc();
+}
+function fillRow(key, v){
+  const tr=[...document.querySelectorAll('#sh-table tbody tr')]
+    .find(t=>t.querySelector(`.cell[data-k^="${key}|"]`));
+  if(!tr) return;
+  tr.querySelectorAll('.cell').forEach(td=>_applyCell(td, v));
+  recalc();
 }
 function weekly(){
   const name=prompt('どの従事員に入れますか？（氏名の一部。空欄なら全員）','');
@@ -1264,7 +1289,7 @@ window.saveWeights=saveWeights; window.pickOnMap=pickOnMap;
 window.csDragStart=csDragStart; window.csDragOver=csDragOver; window.csDrop=csDrop; window.csDragEnd=csDragEnd;
 window.shRowDragStart=shRowDragStart; window.shRowDragOver=shRowDragOver; window.shRowDrop=shRowDrop; window.shRowDragEnd=shRowDragEnd;
 window.hideStaff=hideStaff; window.showStaff=showStaff; window.toggleShowHidden=toggleShowHidden;
-window.saleBarsHTML=saleBarsHTML;
+window.saleBarsHTML=saleBarsHTML; window.fillAll=fillAll; window.fillRow=fillRow;
 
 $('sh-off').addEventListener('change', render);
 $('sh-mon').addEventListener('change', render);
