@@ -67,8 +67,8 @@
     .card{padding:8px;margin-bottom:8px;}
     .btn{padding:8px 10px;font-size:12px;}
     .fi{font-size:12px;padding:7px 8px;}
-    #off-tabs, #view-tabs{overflow-x:auto;flex-wrap:nowrap;-webkit-overflow-scrolling:touch;padding-bottom:2px;}
-    #off-tabs .btn, #view-tabs .btn{white-space:nowrap;flex:0 0 auto;}
+    #off-tabs, #mon-tabs, #view-tabs, #opt-tabs{overflow-x:auto;flex-wrap:nowrap;-webkit-overflow-scrolling:touch;padding-bottom:2px;}
+    #off-tabs .btn, #mon-tabs .btn, #view-tabs .btn, #opt-tabs .btn, #opt-tabs .fi{white-space:nowrap;flex:0 0 auto;}
     .tw{max-height:70vh;}
     table{font-size:10.5px;}
     th,td{padding:2px 3px;}
@@ -93,7 +93,7 @@
 <header>
   <div>
     <h1>大阪急配　シフト表</h1>
-    <div class="ver" id="app-ver">ver 2026-09-25.15</div>
+    <div class="ver" id="app-ver">ver 2026-09-25.17</div>
   </div>
   <div class="row" style="margin-left:auto;">
     <select id="sh-off" class="fi" style="display:none;"></select>
@@ -102,16 +102,20 @@
   </div>
   <div class="row" id="off-tabs" style="flex-basis:100%;gap:4px;"></div>
   <div class="row" id="mon-tabs" style="flex-basis:100%;gap:4px;"></div>
+  <!-- ★ 2026-09-25.16: 画面の切り替えと、表示の設定を別の行に分ける -->
   <div class="row" id="view-tabs" style="flex-basis:100%;gap:4px;align-items:center;">
     <button class="btn" id="vt-shift" onclick="setView('shift')">シフト表</button>
     <button class="btn gh" id="vt-course" onclick="setView('course')">集荷コース</button>
     <span id="hdr-extra" class="row" style="gap:6px;margin-left:auto;"></span>
+  </div>
+  <div class="row" id="opt-tabs" style="flex-basis:100%;gap:4px;align-items:center;">
+    <button class="btn gh" id="tg-hdr" onclick="toggleHeader()">ヘッダー</button>
     <button class="btn gh" id="tg-btns" onclick="toggleRowBtns()">操作ボタン</button>
     <button class="btn gh" id="tg-bars" onclick="toggleSaleBars()">セール帯</button>
     <button class="btn gh" onclick="openZoom('shift')">拡大</button>
-    <button class="btn gh" id="tg-hdr" onclick="toggleHeader()">ヘッダー</button>
     <span class="xs muted">並べて編集</span>
     <select id="sh-off2" class="fi" style="width:auto;" onchange="render()"></select>
+    <span style="margin-left:auto;"></span>
     <button class="btn gh" id="th-dark" title="背景を黒に" onclick="setTheme('dark')">黒</button>
     <button class="btn gh" id="th-light" title="背景を白に" onclick="setTheme('light')">白</button>
     <button class="btn gh" title="使い方" onclick="showHelp()">？</button>
@@ -219,7 +223,7 @@ document.dispatchEvent(new Event('fb-sdk-ready'));
 
 <script>
 'use strict';
-const APP_VER = '2026-09-25.15';
+const APP_VER = '2026-09-25.17';
 console.log('[シフト表] APP_VER', APP_VER);
 
 const FB_CONFIG = {
@@ -1087,10 +1091,10 @@ function renderPane(paneOffice, rootId, isMain){
       <thead>${head}</thead><tbody>${body}</tbody><tfoot>${foot}</tfoot></table></div>
 
     ${holidayNoteHTML(mon, last)}
-    ${saleListHTML(mon, saleMap)}
-    ${colMode?courseSummaryHTML(office, mon, data):''}
-    ${dowEditHTML(office, mon)}
-    ${weightsHTML(colMode)}
+    ${(isMain && !($('sh-off2')?.value))?saleListHTML(mon, saleMap):''}
+    ${(isMain && colMode)?courseSummaryHTML(office, mon, data):''}
+    ${isMain?dowEditHTML(office, mon):''}
+    ${isMain?weightsHTML(colMode):''}
     `;
   // ★ 2026-09-25.9: 警告は日付の前（表の上）に出す
   {
@@ -1950,9 +1954,12 @@ function renderOffTabs(){
   const sel2=$('sh-off2');
   if(sel2){
     const cur2=sel2.value;
-    const names=[...new Set([...delOffices(), ...(D.locations||[]).filter(l=>l&&l.active!==false).map(l=>l.name)])];
+    const nowOff=$('sh-off')?.value||'';
+    // ★ 2026-09-25.17: いま開いている営業所は候補に出さない
+    const names=[...new Set([...delOffices(), ...(D.locations||[]).filter(l=>l&&l.active!==false).map(l=>l.name)])]
+      .filter(n=>n!==nowOff);
     sel2.innerHTML='<option value="">なし</option>'+names.map(n=>`<option value="${esc(n)}">${esc(n)}</option>`).join('');
-    if(cur2 && names.includes(cur2)) sel2.value=cur2;
+    sel2.value = (cur2 && names.includes(cur2)) ? cur2 : '';
   }
   const box=$('off-tabs'); if(!box) return;
   const offs=delOffices();
