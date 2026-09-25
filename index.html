@@ -93,7 +93,7 @@
 <header>
   <div>
     <h1>大阪急配　シフト表</h1>
-    <div class="ver" id="app-ver">ver 2026-09-25.17</div>
+    <div class="ver" id="app-ver">ver 2026-09-25.18</div>
   </div>
   <div class="row" style="margin-left:auto;">
     <select id="sh-off" class="fi" style="display:none;"></select>
@@ -223,7 +223,7 @@ document.dispatchEvent(new Event('fb-sdk-ready'));
 
 <script>
 'use strict';
-const APP_VER = '2026-09-25.17';
+const APP_VER = '2026-09-25.18';
 console.log('[シフト表] APP_VER', APP_VER);
 
 const FB_CONFIG = {
@@ -564,6 +564,20 @@ function applyHeaderState(){
   if(off) off.style.display=_hideHeader?'none':'';
   if(mon) mon.style.display=_hideHeader?'none':'';
   const b=$('tg-hdr'); if(b) b.className=_hideHeader?'btn':'btn gh';
+  // 畳んだときはヘッダー自体を薄く小さくして、表を広く使う
+  const hd=document.querySelector('header');
+  if(hd){
+    hd.style.padding=_hideHeader?'3px 8px':'';
+    hd.style.gap=_hideHeader?'4px':'';
+  }
+  document.querySelectorAll('#view-tabs .btn, #opt-tabs .btn').forEach(el=>{
+    el.style.padding=_hideHeader?'3px 8px':'';
+    el.style.fontSize=_hideHeader?'11px':'';
+  });
+  const h1=document.querySelector('header h1'), vr=document.querySelector('header .ver');
+  if(h1) h1.style.display=_hideHeader?'none':'';
+  if(vr) vr.style.display=_hideHeader?'none':'';
+  setTimeout(fitTableHeight, 0);
 }
 function toggleHeader(){
   _hideHeader=!_hideHeader;
@@ -594,6 +608,13 @@ function applyFcPanel(){
   const b=$('fc-body'), t=$('fc-toggle');
   if(b) b.style.display=_fcOpen?'flex':'none';
   if(t) t.textContent=_fcOpen?'▲ 閉じる':'▼ 開く（予測・保存・印刷）';
+}
+// ★ 2026-09-25.18: 表の下の設定欄の開閉
+let _belowOpen = (()=>{ try{ return localStorage.getItem('shift_below_open')==='1'; }catch(e){ return false; } })();
+function toggleBelowPanel(){
+  _belowOpen=!_belowOpen;
+  try{ localStorage.setItem('shift_below_open', _belowOpen?'1':'0'); }catch(e){}
+  render();
 }
 function toggleFcPanel(){
   _fcOpen=!_fcOpen;
@@ -1090,11 +1111,16 @@ function renderPane(paneOffice, rootId, isMain){
       </colgroup>
       <thead>${head}</thead><tbody>${body}</tbody><tfoot>${foot}</tfoot></table></div>
 
+    ${isMain?`<div class="row xs muted" style="margin-top:8px;cursor:pointer;" onclick="toggleBelowPanel()">
+      <span id="below-toggle">${_belowOpen?'▲ 下の設定を閉じる':'▼ 下の設定を開く（祝日・曜日係数・人数の重み）'}</span>
+    </div>`:''}
+    <div id="below-panel" style="display:${(isMain&&_belowOpen)?'block':'none'};">
     ${holidayNoteHTML(mon, last)}
     ${(isMain && !($('sh-off2')?.value))?saleListHTML(mon, saleMap):''}
     ${(isMain && colMode)?courseSummaryHTML(office, mon, data):''}
     ${isMain?dowEditHTML(office, mon):''}
     ${isMain?weightsHTML(colMode):''}
+    </div>
     `;
   // ★ 2026-09-25.9: 警告は日付の前（表の上）に出す
   {
@@ -2657,7 +2683,7 @@ window.addStop=addStop; window.moveStop=moveStop; window.delStop=delStop;
 window.addPostStop=addPostStop; window.pickPostStopOnMap=pickPostStopOnMap; window.addOriginStop=addOriginStop;
 window.moveCourseOffice=moveCourseOffice;
 window.toggleRowBtns=toggleRowBtns; window.toggleSaleBars=toggleSaleBars; window.toggleMute=toggleMute;
-window.toggleHeader=toggleHeader; window.fitTableHeight=fitTableHeight;
+window.toggleHeader=toggleHeader; window.fitTableHeight=fitTableHeight; window.toggleBelowPanel=toggleBelowPanel;
 window.save2=save2; window.saveDraft2=saveDraft2; window.renderPane=renderPane; window.openOtherMenu=openOtherMenu; window.clearOtherCell=clearOtherCell;
 window.clearClearedMarks=clearClearedMarks; window.restoreCleared=restoreCleared; window.toggleFcPanel=toggleFcPanel;
 window.openZoom=openZoom; window.closeZoom=closeZoom; window.zoomTab=zoomTab; window.setStopU=setStopU; window.holdStopU=holdStopU; window.moveStopU=moveStopU; window.delStopU=delStopU; window.startFixPos=startFixPos;
