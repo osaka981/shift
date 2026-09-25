@@ -93,7 +93,7 @@
 <header>
   <div>
     <h1>大阪急配　シフト表</h1>
-    <div class="ver" id="app-ver">ver 2026-09-25.23</div>
+    <div class="ver" id="app-ver">ver 2026-09-25.24</div>
   </div>
   <div class="row" style="margin-left:auto;">
     <select id="sh-off" class="fi" style="display:none;"></select>
@@ -223,7 +223,7 @@ document.dispatchEvent(new Event('fb-sdk-ready'));
 
 <script>
 'use strict';
-const APP_VER = '2026-09-25.23';
+const APP_VER = '2026-09-25.24';
 console.log('[シフト表] APP_VER', APP_VER);
 
 const FB_CONFIG = {
@@ -2742,11 +2742,21 @@ function printSheet(withSale){
     const cols=[...cg.querySelectorAll('col')];
     cols.forEach((c,i)=>{ c.removeAttribute('style'); if(i>0) c.className='day'; });
   }
-  clone.querySelectorAll('th,td').forEach(el=>{
-    const st=el.getAttribute('style')||'';
-    // 背景色（土日祝・セール）は残し、幅や影の指定は外す
-    el.setAttribute('style', st.replace(/min-width:[^;]+;?/g,'').replace(/box-shadow:[^;]+;?/g,''));
+  // ★ 2026-09-25.24: ドラッグの印を消し、白黒でも土日祝が分かるように薄いグレーにする
+  clone.querySelectorAll('td, th').forEach(el=>{
+    let st=(el.getAttribute('style')||'').replace(/min-width:[^;]+;?/g,'').replace(/box-shadow:[^;]+;?/g,'');
+    if(/rgba\(224,\s*102,\s*102/.test(st)){        // 日曜・祝日
+      st=st.replace(/background:[^;]+;?/g,'') + 'background:#e8e8e8;-webkit-print-color-adjust:exact;print-color-adjust:exact;';
+    } else if(/rgba\(111,\s*168,\s*220/.test(st)){ // 土曜
+      st=st.replace(/background:[^;]+;?/g,'') + 'background:#f0f0f0;-webkit-print-color-adjust:exact;print-color-adjust:exact;';
+    }
+    el.setAttribute('style', st);
   });
+  // 氏名の欄から⠿（ドラッグの印）を取り除く
+  clone.querySelectorAll('tbody tr td:first-child span').forEach(sp=>{
+    if((sp.textContent||'').trim()==='⠿') sp.remove();
+  });
+  clone.querySelectorAll('[draggable]').forEach(el=>el.removeAttribute('draggable'));
   // セール予定のカレンダー（任意）
   let saleHtml='';
   if(withSale){
