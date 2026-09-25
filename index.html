@@ -93,7 +93,7 @@
 <header>
   <div>
     <h1>大阪急配　シフト表</h1>
-    <div class="ver" id="app-ver">ver 2026-09-25.5</div>
+    <div class="ver" id="app-ver">ver 2026-09-25.7</div>
   </div>
   <div class="row" style="margin-left:auto;">
     <select id="sh-off" class="fi" style="display:none;"></select>
@@ -198,7 +198,7 @@ document.dispatchEvent(new Event('fb-sdk-ready'));
 
 <script>
 'use strict';
-const APP_VER = '2026-09-25.5';
+const APP_VER = '2026-09-25.7';
 console.log('[シフト表] APP_VER', APP_VER);
 
 const FB_CONFIG = {
@@ -389,6 +389,73 @@ function isMuted(data, st, d, otherOffice){
   const list=(data.mutes||{})[muteKey(st,d)]||[];
   return list.includes(otherOffice);
 }
+// ★ 2026-09-25.6: 他営業所の表示はメニューから操作する（誤ってますを書き換えないため）
+function openOtherMenu(el, k, otherOffice, muted){
+  const items = muted
+    ? [{value:'show', label:'表示に戻す（印刷にも出す）'}, {value:'clear', label:'相手のシフトを空にする'}]
+    : [{value:'hide', label:'非表示にする（印刷から外す）'}, {value:'clear', label:'相手のシフトを空にする'}];
+  openPickMenu(el, items, async v=>{
+    if(v==='hide' || v==='show'){ await toggleMute(k, otherOffice); return; }
+    if(v==='clear'){
+      if(!confirm(`${otherOffice} のこの日のシフトを空にします。\n相手の営業所の表からも消えます。よろしいですか？`)) return;
+      await clearOtherCell(k, otherOffice);
+    }
+  });
+}
+// 相手の営業所のますを空にする
+async function clearOtherCell(k, otherOffice){
+  const mon=_ymNorm($('sh-mon').value||'');
+  const office=$('sh-off').value||'';
+  const [who, day]=String(k).split('|');
+  const all={...(D.shifts||{})};
+  const rec=all[shKey(otherOffice,mon)];
+  if(rec && rec.cells){
+    const cells={...rec.cells};
+    delete cells[`${who}|${day}`];
+    // 旧いキー（従業員ID）も消す
+    const st=(D.staff||[]).find(x=>String(x.empNo||x.id)===String(who));
+    if(st) delete cells[`${st.id}|${day}`];
+    all[shKey(otherOffice,mon)]={...rec, cells, updatedAt:new Date().toISOString()};
+    D.shifts=all;
+    await fbSet('shifts', all);
+  }
+  // ★ 2026-09-25.7: 空にしたことを相手の営業所に残す（埋めるか消すまで色と注記を出す）
+  {
+    const rec2={...(all[shKey(otherOffice,mon)]||{office:otherOffice, mon, cells:{}})};
+    const cleared={...(rec2.cleared||{})};
+    cleared[`${who}|${day}`]={by:office, at:new Date().toISOString()};
+    rec2.cleared=cleared;
+    all[shKey(otherOffice,mon)]=rec2;
+    D.shifts=all;
+    await fbSet('shifts', all);
+  }
+  // 下書きにも同じ内容があれば消す
+  const dr={...(D.drafts||{})};
+  const drec=dr[shKey(otherOffice,mon)];
+  if(drec && drec.cells){
+    const cells={...drec.cells};
+    delete cells[`${who}|${day}`];
+    const st=(D.staff||[]).find(x=>String(x.empNo||x.id)===String(who));
+    if(st) delete cells[`${st.id}|${day}`];
+    dr[shKey(otherOffice,mon)]={...drec, cells};
+    D.drafts=dr;
+    await fbSet('shift_drafts', dr);
+  }
+  render();
+}
+// 「要入力」の注記をまとめて消す
+async function clearClearedMarks(){
+  const office=$('sh-off').value||'', mon=_ymNorm($('sh-mon').value||'');
+  if(!confirm('この月の「要入力」の注記をすべて消しますか？（シフトの内容は変わりません）')) return;
+  const all={...(D.shifts||{})};
+  const rec={...(all[shKey(office,mon)]||{})};
+  delete rec.cleared;
+  all[shKey(office,mon)]=rec;
+  D.shifts=all;
+  await fbSet('shifts', all);
+  render();
+}
+// 入力したら、その日の注記は自動で消える（保存時に整理する）
 async function toggleMute(k, otherOffice){
   const office=$('sh-off').value||'', mon=_ymNorm($('sh-mon').value||'');
   const all={...(D.shifts||{})};
@@ -796,6 +863,7 @@ function render(){
   head+='<th>休</th><th class="num">平均持出</th><th class="num">最大平均</th></tr>';
   let body='';
   const conflicts=[];
+  const clearedList=[];
   staff.forEach(st=>{
     const av=avgMochidashi(st, mon);
     let off=0, tds='';
@@ -803,6 +871,10 @@ function render(){
       const key=cellKeyOf(st, d);
       const v=cellGet(data.cells, st, d, work);
       if(v==='×') off++;
+      // ★ 2026-09-25.7: 他の営業所から空にされたます
+      const clearedInfo=(data.cleared||{})[`${st.empNo||st.id}|${d}`] || (data.cleared||{})[`${st.id}|${d}`];
+      const clearedOpen = !!clearedInfo && !v;   // まだ埋めていない
+      if(clearedOpen) clearedList.push(`${st.name} ${d}日（${clearedInfo.by}）`);
       // 他の営業所の出勤（表示だけ。消すこともできる）
       // ★ 2026-09-25.3: 非表示にしたものは消さず、薄く表示して印刷から外す
       const others=otherOfficeEntries(office, mon, st, d);
@@ -812,13 +884,14 @@ function render(){
       const othersHtml=others.map(o=>{
         const muted=isMuted(data, st, d, o.office);
         const bad=!muted && binsOf(o.v).some(b=>mine.includes(b));
-        return `<div class="oth${muted?' oth-muted':''}" title="${esc(o.office)}（クリックで${muted?'印刷に出す':'印刷から外す'}）"
-          onclick="event.stopPropagation();toggleMute('${muteKey(st,d)}','${esc(o.office)}')"
-          style="font-size:9px;line-height:1.1;cursor:pointer;color:${bad?'#d9534f':'var(--txt2)'};${muted?'opacity:.35;text-decoration:line-through;':''}">${esc(shortOffice(o.office))}${SHIFT_LABEL[o.v]||(String(o.v).startsWith('C:')?'コ':'')}</div>`;
+        return `<div class="oth${muted?' oth-muted':''}" title="${esc(o.office)}（クリックで操作を選ぶ）"
+          onclick="event.stopPropagation();openOtherMenu(this,'${muteKey(st,d)}','${esc(o.office)}',${muted})"
+          style="font-size:9.5px;line-height:1.15;cursor:pointer;font-weight:700;color:${bad?'#d9534f':'var(--txt)'};${muted?'opacity:.3;font-weight:400;text-decoration:line-through;':''}">${esc(shortOffice(o.office))}${SHIFT_LABEL[o.v]||(String(o.v).startsWith('C:')?'コ':'')}</div>`;
       }).join('');
       tds+=`<td class="cell" tabindex="0" data-k="${key}" data-d="${d}" data-v="${v}" data-bg="${colBg[d]}"
         onclick="${colMode?`pickCourse(this)`:`cycle(this)`}" onkeydown="cellKey(event,this)"
-        style="${colBg[d]}${cellStyle(v)}${clash?'box-shadow:inset 0 0 0 2px #d9534f;':''}">${cellLabel(office, v)}${othersHtml}</td>`;
+        title="${clearedOpen?`${esc(clearedInfo.by)} から空にされました。入力するか、この注記を消してください`:''}"
+        style="${colBg[d]}${cellStyle(v)}${clash?'box-shadow:inset 0 0 0 2px #d9534f;':(clearedOpen?'box-shadow:inset 0 0 0 99px rgba(224,139,31,.22), inset 0 0 0 2px #e08b1f;':'')}">${cellLabel(office, v)}${othersHtml}${clearedOpen?`<div class="xs" style="font-size:8.5px;line-height:1.1;color:#e08b1f;">要入力</div>`:''}</td>`;
     }
     const _k=staffKey(st);
     const _isHid=hiddenOf(office).includes(_k);
@@ -907,6 +980,10 @@ function render(){
         <col style="width:${OFF_W}px;"><col style="width:${AVG_W}px;">
       </colgroup>
       <thead>${head}</thead><tbody>${body}</tbody><tfoot>${foot}</tfoot></table></div>
+    ${clearedList.length?`<div class="al al-w" style="margin-top:8px;">
+      他の営業所からこの日のシフトを空にされています（橙色のます）：${esc(clearedList.slice(0,12).join('、'))}${clearedList.length>12?` ほか${clearedList.length-12}件`:''}
+      <button class="btn gh" style="margin-left:8px;padding:2px 8px;font-size:11px;" onclick="clearClearedMarks()">注記を消す</button>
+    </div>`:''}
     ${conflicts.length?`<div class="al al-e" style="margin-top:8px;">同じ日に別の営業所と重なっています：${esc(conflicts.slice(0,12).join('、'))}${conflicts.length>12?` ほか${conflicts.length-12}件`:''}</div>`:''}
     ${holidayNoteHTML(mon, last)}
     ${saleListHTML(mon, saleMap)}
@@ -1391,7 +1468,9 @@ async function save(){
   const all={...(D.shifts||{})};
   // ★ 2026-09-24.51: 予測（月合計・昨対）は保存で消さない
   const prev=all[shKey(office,mon)]||{};
-  all[shKey(office,mon)]={...prev, office, mon, cells, updatedAt:new Date().toISOString()};
+  const cleared={...(prev.cleared||{})};
+  Object.keys(cleared).forEach(k=>{ if(cells[k]) delete cleared[k]; });   // 埋まったら注記を外す
+  all[shKey(office,mon)]={...prev, office, mon, cells, cleared, updatedAt:new Date().toISOString()};
   D.shifts=all;
   const ok=await fbSet('shifts', all);
   // 確定したら下書きは消す
@@ -2394,7 +2473,8 @@ window.setDepart=setDepart; window.setPost=setPost; window.setStop=setStop;
 window.addStop=addStop; window.moveStop=moveStop; window.delStop=delStop;
 window.addPostStop=addPostStop; window.pickPostStopOnMap=pickPostStopOnMap; window.addOriginStop=addOriginStop;
 window.moveCourseOffice=moveCourseOffice;
-window.toggleRowBtns=toggleRowBtns; window.toggleSaleBars=toggleSaleBars; window.toggleMute=toggleMute;
+window.toggleRowBtns=toggleRowBtns; window.toggleSaleBars=toggleSaleBars; window.toggleMute=toggleMute; window.openOtherMenu=openOtherMenu; window.clearOtherCell=clearOtherCell;
+window.clearClearedMarks=clearClearedMarks;
 window.openZoom=openZoom; window.closeZoom=closeZoom; window.zoomTab=zoomTab; window.setStopU=setStopU; window.holdStopU=holdStopU; window.moveStopU=moveStopU; window.delStopU=delStopU; window.startFixPos=startFixPos;
 window.saveWeights=saveWeights; window.pickOnMap=pickOnMap;
 window.csDragStart=csDragStart; window.csDragOver=csDragOver; window.csDrop=csDrop; window.csDragEnd=csDragEnd;
