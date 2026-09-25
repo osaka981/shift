@@ -93,7 +93,7 @@
 <header>
   <div>
     <h1>大阪急配　シフト表</h1>
-    <div class="ver" id="app-ver">ver 2026-09-24.53</div>
+    <div class="ver" id="app-ver">ver 2026-09-25.2</div>
   </div>
   <div class="row" style="margin-left:auto;">
     <select id="sh-off" class="fi" style="display:none;"></select>
@@ -198,7 +198,7 @@ document.dispatchEvent(new Event('fb-sdk-ready'));
 
 <script>
 'use strict';
-const APP_VER = '2026-09-24.53';
+const APP_VER = '2026-09-25.2';
 console.log('[シフト表] APP_VER', APP_VER);
 
 const FB_CONFIG = {
@@ -448,12 +448,26 @@ function toggleForecastRows(){
   render();
 }
 function toggleSaleBars(){ _hideSaleBars=!_hideSaleBars; try{ localStorage.setItem('shift_hide_bars', _hideSaleBars?'1':'0'); }catch(e){} render(); }
+// ★ 2026-09-25.1: 事業部の判定（日報アプリと同じ基準）
+function hasDept(st, type){
+  const dep=(D.departments||[]).find(d=>d && d.type===type);
+  if(!dep) return true;                       // 部署マスタが無ければ絞らない
+  const ids=(st.deptIds||[]).map(String);
+  if(!ids.length) return true;                // 台帳に部署の設定が無い人は絞らない
+  return ids.includes(String(dep.id));
+}
 function staffOf(office, all){
   const col=isColOffice(office);
   const list=(D.staff||[]).filter(s=>{
     if(!s || s.status==='終了') return false;
-    // ★ 2026-09-24.53: 集荷の営業所では委託会社所属は出さない
-    if(col && (s.companyId || s.companyName)) return false;
+    if(col){
+      // ★ 2026-09-25.2: 集荷の営業所は「集荷事業部のチェック」で判定（担当郵便局は見ない）。
+      //   委託会社所属は出さない。
+      if(s.companyId || s.companyName) return false;
+      return hasDept(s, 'col');
+    }
+    // 宅配の営業所は、担当郵便局（メイン＋複数対応）＋宅配事業部のチェック
+    if(!hasDept(s, 'del')) return false;
     if(s.office===office) return true;
     return (s.subOffices||[]).some(o=>(typeof o==='string'?o:o?.name)===office);
   });
