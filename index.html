@@ -93,7 +93,7 @@
 <header>
   <div>
     <h1>大阪急配　シフト表</h1>
-    <div class="ver" id="app-ver">ver 2026-09-25.18</div>
+    <div class="ver" id="app-ver">ver 2026-09-25.19</div>
   </div>
   <div class="row" style="margin-left:auto;">
     <select id="sh-off" class="fi" style="display:none;"></select>
@@ -223,7 +223,7 @@ document.dispatchEvent(new Event('fb-sdk-ready'));
 
 <script>
 'use strict';
-const APP_VER = '2026-09-25.18';
+const APP_VER = '2026-09-25.19';
 console.log('[シフト表] APP_VER', APP_VER);
 
 const FB_CONFIG = {
@@ -611,6 +611,33 @@ function applyFcPanel(){
 }
 // ★ 2026-09-25.18: 表の下の設定欄の開閉
 let _belowOpen = (()=>{ try{ return localStorage.getItem('shift_below_open')==='1'; }catch(e){ return false; } })();
+// ★ 2026-09-25.19: 2枚目の営業所の予測・設定
+let _below2Open=false;
+function toggleBelow2(){ _below2Open=!_below2Open; render(); }
+function applyYoy2(office){
+  const mon=_ymNorm($('sh-mon').value||'');
+  const ly=lastYearTotal(office, mon);
+  const yoy=Number($('fc2-yoy')?.value)||0;
+  if(!ly){ alert('前年同月の実績がありません。合計を手で入れてください。'); return; }
+  if(!yoy){ alert('昨対（%）を入れてください'); return; }
+  $('fc2-total').value=Math.round(ly*yoy/100);
+}
+async function saveForecast2(office){
+  const mon=_ymNorm($('sh-mon').value||'');
+  const v=$('fc2-dowsrc')?.value.trim()||'';
+  const st={...(D.settings||{})};
+  st.dowSrc={...(st.dowSrc||{}), [office]:v};
+  D.settings=st;
+  await fbSet('shift_settings', st);
+  const all={...(D.shifts||{})};
+  const cur={...(all[shKey(office,mon)]||{office, mon, cells:{}})};
+  cur.forecast={ total:Number($('fc2-total')?.value)||0, yoy:Number($('fc2-yoy')?.value)||0, updatedAt:new Date().toISOString() };
+  all[shKey(office,mon)]=cur;
+  D.shifts=all;
+  const ok=await fbSet('shifts', all);
+  render();
+  if(!ok) alert('端末には保存しましたが、サーバーへの保存に失敗しました。');
+}
 function toggleBelowPanel(){
   _belowOpen=!_belowOpen;
   try{ localStorage.setItem('shift_below_open', _belowOpen?'1':'0'); }catch(e){}
@@ -1121,6 +1148,25 @@ function renderPane(paneOffice, rootId, isMain){
     ${isMain?dowEditHTML(office, mon):''}
     ${isMain?weightsHTML(colMode):''}
     </div>
+    ${isMain?'':`
+      <div class="row xs muted" style="margin-top:8px;cursor:pointer;" onclick="toggleBelow2()">
+        <span>${_below2Open?'▲ この営業所の設定を閉じる':'▼ この営業所の設定を開く（予測・曜日係数）'}</span>
+      </div>
+      <div style="display:${_below2Open?'block':'none'};">
+        <div class="row" style="align-items:flex-end;gap:8px;margin-top:6px;">
+          <div><div class="xs muted">月の予測合計（持出）</div>
+            <input type="number" id="fc2-total" class="fi" style="width:110px;" value="${(shGet(office,mon).forecast?.total)||''}" placeholder="例 21000"></div>
+          <div><div class="xs muted">昨対（%）</div>
+            <input type="number" id="fc2-yoy" class="fi" style="width:80px;" value="${(shGet(office,mon).forecast?.yoy)||''}" placeholder="例 105"></div>
+          <span class="xs muted">${lastYearTotal(office, mon)?`前年同月 ${lastYearTotal(office, mon).toLocaleString()}個`:'前年同月の実績なし'}</span>
+          <button class="btn gh" onclick="applyYoy2('${esc(office)}')">昨対から計算</button>
+          <div><div class="xs muted">曜日の参照月</div>
+            <input type="text" id="fc2-dowsrc" class="fi" style="width:180px;" value="${esc(dowSrcOf(office))}" placeholder="空欄なら直近6か月"></div>
+          <button class="btn grn" onclick="saveForecast2('${esc(office)}')">予測を保存</button>
+        </div>
+        ${holidayNoteHTML(mon, last)}
+        ${dowEditHTML(office, mon, '2')}
+      </div>`}
     `;
   // ★ 2026-09-25.9: 警告は日付の前（表の上）に出す
   {
@@ -1338,7 +1384,8 @@ function courseSummaryHTML(office, mon, data){
   </div>`;
 }
 // ★ 2026-09-24.38: 曜日係数の確認と手直し
-function dowEditHTML(office, mon){
+function dowEditHTML(office, mon, sfx){
+  sfx = sfx||'';
   const dw=dowFactors(office, mon);
   const W=['日','月','火','水','木','金','土'];
   const ov=(D.settings?.dowOverride||{})[office]||{};
@@ -1366,10 +1413,10 @@ function dowEditHTML(office, mon){
   return `<div class="row" style="margin-top:12px;gap:6px;align-items:center;flex-wrap:wrap;">
     <span class="xs fw7">曜日の係数（％）</span>
     ${W.map((w,i)=>`<span class="xs muted">${w}</span>
-      <input type="number" class="fi dow-in" data-i="${i}" style="width:62px;"
+      <input type="number" class="fi dow-in${sfx}" data-i="${i}" style="width:62px;"
         value="${ov[i]!=null&&ov[i]!==''?ov[i]:Math.round((dw.f[i]||0)*100)}">`).join('')}
-    <button class="btn gh" onclick="saveDowOverride()">係数を保存</button>
-    <button class="btn gh" onclick="clearDowOverride()">実績に戻す</button>
+    <button class="btn gh" onclick="saveDowOverride('${esc(office)}','${sfx}')">係数を保存</button>
+    <button class="btn gh" onclick="clearDowOverride('${esc(office)}')">実績に戻す</button>
     <span class="xs muted" style="flex-basis:100%;">係数は「平均を100%としたときの重み」です。月の合計は必ず予測の合計になるよう割り戻します（祝日は日曜、祝日の翌日は月曜として計算します）。</span>
     ${total?`<div style="flex-basis:100%;margin-top:6px;">
       <div class="tw" style="max-height:none;"><table>
@@ -1384,10 +1431,10 @@ function dowEditHTML(office, mon){
     </div>`:'<span class="xs muted" style="flex-basis:100%;">月の予測合計を入れると、曜日ごとの割り振り（個数）が出ます。</span>'}
   </div>`;
 }
-async function saveDowOverride(){
-  const office=$('sh-off').value||'';
+async function saveDowOverride(office, sfx){
+  office = office || $('sh-off').value||'';
   const ov={};
-  document.querySelectorAll('.dow-in').forEach(el=>{ ov[el.dataset.i]=Number(el.value)||0; });
+  document.querySelectorAll('.dow-in'+(sfx||'')).forEach(el=>{ ov[el.dataset.i]=Number(el.value)||0; });
   const st={...(D.settings||{})};
   st.dowOverride={...(st.dowOverride||{}), [office]:ov};
   D.settings=st;
@@ -1395,8 +1442,8 @@ async function saveDowOverride(){
   render();
   if(!ok) alert('端末には保存しましたが、サーバーへの保存に失敗しました。');
 }
-async function clearDowOverride(){
-  const office=$('sh-off').value||'';
+async function clearDowOverride(office){
+  office = office || $('sh-off').value||'';
   const st={...(D.settings||{})};
   const o={...(st.dowOverride||{})}; delete o[office];
   st.dowOverride=o; D.settings=st;
@@ -2684,6 +2731,7 @@ window.addPostStop=addPostStop; window.pickPostStopOnMap=pickPostStopOnMap; wind
 window.moveCourseOffice=moveCourseOffice;
 window.toggleRowBtns=toggleRowBtns; window.toggleSaleBars=toggleSaleBars; window.toggleMute=toggleMute;
 window.toggleHeader=toggleHeader; window.fitTableHeight=fitTableHeight; window.toggleBelowPanel=toggleBelowPanel;
+window.toggleBelow2=toggleBelow2; window.applyYoy2=applyYoy2; window.saveForecast2=saveForecast2;
 window.save2=save2; window.saveDraft2=saveDraft2; window.renderPane=renderPane; window.openOtherMenu=openOtherMenu; window.clearOtherCell=clearOtherCell;
 window.clearClearedMarks=clearClearedMarks; window.restoreCleared=restoreCleared; window.toggleFcPanel=toggleFcPanel;
 window.openZoom=openZoom; window.closeZoom=closeZoom; window.zoomTab=zoomTab; window.setStopU=setStopU; window.holdStopU=holdStopU; window.moveStopU=moveStopU; window.delStopU=delStopU; window.startFixPos=startFixPos;
