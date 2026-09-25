@@ -93,7 +93,7 @@
 <header>
   <div>
     <h1>大阪急配　シフト表</h1>
-    <div class="ver" id="app-ver">ver 2026-09-25.19</div>
+    <div class="ver" id="app-ver">ver 2026-09-25.22</div>
   </div>
   <div class="row" style="margin-left:auto;">
     <select id="sh-off" class="fi" style="display:none;"></select>
@@ -223,7 +223,7 @@ document.dispatchEvent(new Event('fb-sdk-ready'));
 
 <script>
 'use strict';
-const APP_VER = '2026-09-25.19';
+const APP_VER = '2026-09-25.22';
 console.log('[シフト表] APP_VER', APP_VER);
 
 const FB_CONFIG = {
@@ -713,14 +713,14 @@ function toggleShowHidden(){ _showHidden=!_showHidden; render(); }
 let _shDragFrom=null;
 function shRowDragStart(e, key){ _shDragFrom=key; try{ e.dataTransfer.effectAllowed='move'; e.dataTransfer.setData('text/plain', key); }catch(_){} }
 function shRowDragOver(e){ e.preventDefault(); const tr=e.currentTarget; if(tr&&tr.style) tr.style.outline='2px solid var(--accent)'; }
-function shRowDragEnd(){ document.querySelectorAll('#sh-table tbody tr').forEach(tr=>tr.style.outline=''); _shDragFrom=null; }
-async function shRowDrop(e, toKey){
+function shRowDragEnd(){ document.querySelectorAll('tbody tr').forEach(tr=>tr.style.outline=''); _shDragFrom=null; }
+async function shRowDrop(e, toKey, office){
   e.preventDefault();
-  document.querySelectorAll('#sh-table tbody tr').forEach(tr=>tr.style.outline='');
+  document.querySelectorAll('tbody tr').forEach(tr=>tr.style.outline='');
   const from=_shDragFrom || (e.dataTransfer?e.dataTransfer.getData('text/plain'):'');
   _shDragFrom=null;
   if(!from || from===toKey) return;
-  const office=$('sh-off').value||'';
+  office = office || (e.currentTarget && e.currentTarget.dataset ? e.currentTarget.dataset.off : '') || $('sh-off').value||'';
   const keys=staffOf(office, true).map(staffKey);
   const fi=keys.indexOf(from), ti=keys.indexOf(toKey);
   if(fi<0 || ti<0) return;
@@ -1051,8 +1051,8 @@ function renderPane(paneOffice, rootId, isMain){
     }
     const _k=staffKey(st);
     const _isHid=hiddenOf(office).includes(_k);
-    body+=`<tr data-staff="${st.id}" style="${_isHid?'opacity:.5;':''}"
-        ondragover="shRowDragOver(event)" ondrop="shRowDrop(event,'${_k}')" ondragend="shRowDragEnd(event)">
+    body+=`<tr data-staff="${st.id}" data-off="${esc(office)}" style="${_isHid?'opacity:.5;':''}"
+        ondragover="shRowDragOver(event)" ondrop="shRowDrop(event,'${_k}','${esc(office)}')" ondragend="shRowDragEnd(event)">
       <td>
         <div style="display:flex;align-items:center;gap:4px;">
           <span class="muted" draggable="true" title="ここをドラッグで並べ替え"
@@ -1611,19 +1611,52 @@ function _applyCell(td, v){
   td.innerHTML=cellLabel($('sh-off').value||'', v);
   td.setAttribute('style', (td.dataset.bg||'')+cellStyle(v));
 }
+// ★ 2026-09-25.20: 他の営業所に出勤がある日は、確認のうえ避けられるようにする
 function fillAll(v){
-  markDirty();
+  const office=$('sh-off').value||'', mon=_ymNorm($('sh-mon').value||'');
+  const cells=[...document.querySelectorAll('#sh-table .cell')];
+  // 他の営業所に入力がある日を数える
+  const clash=[];
+  cells.forEach(td=>{
+    const [who, d]=String(td.dataset.k).split('|');
+    const st=(D.staff||[]).find(x=>String(x.empNo||x.id)===String(who));
+    if(!st) return;
+    const others=otherOfficeEntries(office, mon, st, Number(d));
+    if(others.length) clash.push(td);
+  });
   const label = v==='〇' ? '全員のすべての日を〇にします。' : '全員のすべての日を空にします。';
+  if(clash.length){
+    const ok1=confirm(`${label}\n\nただし ${clash.length}か所は、他の営業所に出勤が入っています。\n\nOK＝その${clash.length}か所は今のままにする（上書きしない）\nキャンセル＝やめる`);
+    if(!ok1) return;
+    markDirty();
+    cells.forEach(td=>{ if(!clash.includes(td)) _applyCell(td, v); });
+    recalc();
+    alert(`他の営業所に出勤がある ${clash.length}か所は変更していません。`);
+    return;
+  }
   if(!confirm(`${label}\nよろしいですか？（保存するまで元に戻せます）`)) return;
-  document.querySelectorAll('#sh-table .cell').forEach(td=>_applyCell(td, v));
+  markDirty();
+  cells.forEach(td=>_applyCell(td, v));
   recalc();
 }
 function fillRow(key, v){
-  markDirty();
+  const office=$('sh-off').value||'', mon=_ymNorm($('sh-mon').value||'');
   const tr=[...document.querySelectorAll('#sh-table tbody tr')]
     .find(t=>t.querySelector(`.cell[data-k^="${key}|"]`));
   if(!tr) return;
-  tr.querySelectorAll('.cell').forEach(td=>_applyCell(td, v));
+  const st=(D.staff||[]).find(x=>String(x.empNo||x.id)===String(key));
+  const cells=[...tr.querySelectorAll('.cell')];
+  const clash=st ? cells.filter(td=>otherOfficeEntries(office, mon, st, Number(String(td.dataset.k).split('|')[1])).length) : [];
+  if(clash.length){
+    const ok=confirm(`${st?st.name:''} の ${clash.length}日は、他の営業所に出勤が入っています。\n\nOK＝その日は今のままにする（上書きしない）\nキャンセル＝やめる`);
+    if(!ok) return;
+    markDirty();
+    cells.forEach(td=>{ if(!clash.includes(td)) _applyCell(td, v); });
+    recalc();
+    return;
+  }
+  markDirty();
+  cells.forEach(td=>_applyCell(td, v));
   recalc();
 }
 function weekly(){
@@ -2702,6 +2735,18 @@ function printSheet(withSale){
   });
   clone.querySelectorAll('button, input, select').forEach(el=>el.remove());
   clone.querySelectorAll('.oth-muted').forEach(el=>el.remove());   // 印刷しない指定のもの
+  // 画面用の固定幅は外し、A4横の幅に合わせる
+  clone.removeAttribute('style');
+  const cg=clone.querySelector('colgroup');
+  if(cg){
+    const cols=[...cg.querySelectorAll('col')];
+    cols.forEach((c,i)=>{ c.removeAttribute('style'); if(i>0) c.className='day'; });
+  }
+  clone.querySelectorAll('th,td').forEach(el=>{
+    const st=el.getAttribute('style')||'';
+    // 背景色（土日祝・セール）は残し、幅や影の指定は外す
+    el.setAttribute('style', st.replace(/min-width:[^;]+;?/g,'').replace(/box-shadow:[^;]+;?/g,''));
+  });
   // セール予定のカレンダー（任意）
   let saleHtml='';
   if(withSale){
@@ -2710,12 +2755,21 @@ function printSheet(withSale){
   }
   const w=window.open('', '_blank');
   if(!w){ alert('印刷用の画面を開けませんでした。ポップアップの設定を確認してください。'); return; }
+  // ★ 2026-09-25.22: A4横1枚に収める
   w.document.write(`<!doctype html><html><head><meta charset="utf-8"><title>${esc(office)} ${esc(mon)} シフト表</title>
-    <style>body{font-family:sans-serif;padding:10px;}h1{font-size:15px;margin:0 0 8px;}
-    table{border-collapse:collapse;font-size:10px;width:100%;}
-    th,td{border:1px solid #999;padding:2px 3px;text-align:center;}
-    td:first-child,th:first-child{text-align:left;white-space:nowrap;}
-    @page{size:A4 landscape;margin:8mm;}</style></head><body>
+    <style>
+      @page{size:A4 landscape;margin:6mm;}
+      body{font-family:sans-serif;margin:0;padding:0;}
+      h1{font-size:12px;margin:0 0 4px;}
+      table{border-collapse:collapse;table-layout:fixed;width:100%;font-size:8px;}
+      col.day{width:2.4%;}
+      th,td{border:1px solid #999;padding:1px 1px;text-align:center;overflow:hidden;
+        white-space:nowrap;text-overflow:ellipsis;line-height:1.15;}
+      td:first-child,th:first-child{text-align:left;width:9%;font-size:8px;}
+      thead th{background:#eee;}
+      div[style*="grid-template-columns"]{font-size:8px;}
+      .page{page-break-before:always;}
+    </style></head><body>
     <h1>${esc(office)}　${esc(mon)}　シフト表</h1>${clone.outerHTML}${saleHtml}
     <script>window.onload=()=>window.print();<\/script></body></html>`);
   w.document.close();
