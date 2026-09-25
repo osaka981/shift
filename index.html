@@ -93,7 +93,7 @@
 <header>
   <div>
     <h1>大阪急配　シフト表</h1>
-    <div class="ver" id="app-ver">ver 2026-09-24.52</div>
+    <div class="ver" id="app-ver">ver 2026-09-24.53</div>
   </div>
   <div class="row" style="margin-left:auto;">
     <select id="sh-off" class="fi" style="display:none;"></select>
@@ -198,7 +198,7 @@ document.dispatchEvent(new Event('fb-sdk-ready'));
 
 <script>
 'use strict';
-const APP_VER = '2026-09-24.52';
+const APP_VER = '2026-09-24.53';
 console.log('[シフト表] APP_VER', APP_VER);
 
 const FB_CONFIG = {
@@ -353,6 +353,58 @@ function delOffices(){
   if(id!=null) locs=locs.filter(l=>!(l.deptIds||[]).length || (l.deptIds||[]).map(String).includes(String(id)));
   return locs.sort((a,b)=>(a.order||99)-(b.order||99)).map(l=>l.name);
 }
+// ★ 2026-09-24.53: 営業所の短い名前（浜寺郵便局→浜寺、大阪西郵便局→大阪西）
+function shortOffice(name){
+  return String(name||'').replace(/郵便局$|営業所$/,'').slice(0,3);
+}
+// 便の集合（重なりの判定に使う）
+function binsOf(v){
+  if(!v || v==='×') return [];
+  if(v==='〇') return [1,2,3];
+  if(v==='~1') return [1];
+  if(v==='~2') return [1,2];
+  if(v==='2~') return [2,3];
+  if(v==='1') return [1];
+  if(v==='2') return [2];
+  if(v==='3') return [3];
+  if(String(v).startsWith('C:')) return [1,2,3];
+  return [];
+}
+// その人・その日の「他の営業所」の入力を集める
+function otherOfficeEntries(office, mon, st, d){
+  const out=[];
+  const key=`${st.empNo||st.id}|${d}`, key2=`${st.id}|${d}`;
+  const src={...(D.shifts||{})};
+  Object.values(D.drafts||{}).forEach(r=>{ if(r) src[shKey(r.office,r.mon)]={...(src[shKey(r.office,r.mon)]||{}), ...r}; });
+  Object.values(src).forEach(rec=>{
+    if(!rec || rec.mon!==mon || rec.office===office) return;
+    const v=(rec.cells||{})[key] ?? (rec.cells||{})[key2] ?? '';
+    if(!v || v==='×') return;
+    out.push({office:rec.office, v});
+  });
+  return out;
+}
+function muteKey(st, d){ return `${st.empNo||st.id}|${d}`; }
+function isMuted(data, st, d, otherOffice){
+  const list=(data.mutes||{})[muteKey(st,d)]||[];
+  return list.includes(otherOffice);
+}
+async function toggleMute(k, otherOffice){
+  const office=$('sh-off').value||'', mon=_ymNorm($('sh-mon').value||'');
+  const all={...(D.shifts||{})};
+  const rec={...(all[shKey(office,mon)]||{office, mon, cells:{}})};
+  const mutes={...(rec.mutes||{})};
+  const cur=[...(mutes[k]||[])];
+  const i=cur.indexOf(otherOffice);
+  if(i>=0) cur.splice(i,1); else cur.push(otherOffice);
+  mutes[k]=cur;
+  rec.mutes=mutes;
+  all[shKey(office,mon)]=rec;
+  D.shifts=all;
+  await fbSet('shifts', all);
+  render();
+}
+
 // ★ 2026-09-24.5: 集荷の拠点か（部署マスタの集荷事業部が付いている拠点）
 // ★ 2026-09-24.5: セルのキーは社員番号。日報アプリ側も社員番号で見るため。
 //   以前保存した「従業員IDのキー」も読み込めるようにする。
@@ -397,8 +449,11 @@ function toggleForecastRows(){
 }
 function toggleSaleBars(){ _hideSaleBars=!_hideSaleBars; try{ localStorage.setItem('shift_hide_bars', _hideSaleBars?'1':'0'); }catch(e){} render(); }
 function staffOf(office, all){
+  const col=isColOffice(office);
   const list=(D.staff||[]).filter(s=>{
     if(!s || s.status==='終了') return false;
+    // ★ 2026-09-24.53: 集荷の営業所では委託会社所属は出さない
+    if(col && (s.companyId || s.companyName)) return false;
     if(s.office===office) return true;
     return (s.subOffices||[]).some(o=>(typeof o==='string'?o:o?.name)===office);
   });
@@ -726,6 +781,7 @@ function render(){
   }
   head+='<th>休</th><th class="num">平均持出</th><th class="num">最大平均</th></tr>';
   let body='';
+  const conflicts=[];
   staff.forEach(st=>{
     const av=avgMochidashi(st, mon);
     let off=0, tds='';
@@ -733,9 +789,17 @@ function render(){
       const key=cellKeyOf(st, d);
       const v=cellGet(data.cells, st, d, work);
       if(v==='×') off++;
+      // 他の営業所の出勤（表示だけ。消すこともできる）
+      const others=otherOfficeEntries(office, mon, st, d).filter(o=>!isMuted(data, st, d, o.office));
+      const mine=binsOf(v);
+      const clash=others.some(o=>binsOf(o.v).some(b=>mine.includes(b)));
+      if(clash) conflicts.push(`${st.name} ${d}日`);
+      const othersHtml=others.map(o=>`<div class="oth" title="${esc(o.office)}（クリックで非表示）"
+        onclick="event.stopPropagation();toggleMute('${muteKey(st,d)}','${esc(o.office)}')"
+        style="font-size:9px;line-height:1.1;color:${clash?'#d9534f':'var(--txt2)'};cursor:pointer;">${esc(shortOffice(o.office))}${SHIFT_LABEL[o.v]||(String(o.v).startsWith('C:')?'コ':'')}</div>`).join('');
       tds+=`<td class="cell" tabindex="0" data-k="${key}" data-d="${d}" data-v="${v}" data-bg="${colBg[d]}"
         onclick="${colMode?`pickCourse(this)`:`cycle(this)`}" onkeydown="cellKey(event,this)"
-        style="${colBg[d]}${cellStyle(v)}">${cellLabel(office, v)}</td>`;
+        style="${colBg[d]}${cellStyle(v)}${clash?'box-shadow:inset 0 0 0 2px #d9534f;':''}">${cellLabel(office, v)}${othersHtml}</td>`;
     }
     const _k=staffKey(st);
     const _isHid=hiddenOf(office).includes(_k);
@@ -824,6 +888,7 @@ function render(){
         <col style="width:${OFF_W}px;"><col style="width:${AVG_W}px;">
       </colgroup>
       <thead>${head}</thead><tbody>${body}</tbody><tfoot>${foot}</tfoot></table></div>
+    ${conflicts.length?`<div class="al al-e" style="margin-top:8px;">同じ日に別の営業所と重なっています：${esc(conflicts.slice(0,12).join('、'))}${conflicts.length>12?` ほか${conflicts.length-12}件`:''}</div>`:''}
     ${holidayNoteHTML(mon, last)}
     ${saleListHTML(mon, saleMap)}
     ${colMode?courseSummaryHTML(office, mon, data):''}
@@ -2258,7 +2323,7 @@ window.setDepart=setDepart; window.setPost=setPost; window.setStop=setStop;
 window.addStop=addStop; window.moveStop=moveStop; window.delStop=delStop;
 window.addPostStop=addPostStop; window.pickPostStopOnMap=pickPostStopOnMap; window.addOriginStop=addOriginStop;
 window.moveCourseOffice=moveCourseOffice;
-window.toggleRowBtns=toggleRowBtns; window.toggleSaleBars=toggleSaleBars;
+window.toggleRowBtns=toggleRowBtns; window.toggleSaleBars=toggleSaleBars; window.toggleMute=toggleMute;
 window.openZoom=openZoom; window.closeZoom=closeZoom; window.zoomTab=zoomTab; window.setStopU=setStopU; window.holdStopU=holdStopU; window.moveStopU=moveStopU; window.delStopU=delStopU; window.startFixPos=startFixPos;
 window.saveWeights=saveWeights; window.pickOnMap=pickOnMap;
 window.csDragStart=csDragStart; window.csDragOver=csDragOver; window.csDrop=csDrop; window.csDragEnd=csDragEnd;
