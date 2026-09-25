@@ -93,7 +93,7 @@
 <header>
   <div>
     <h1>大阪急配　シフト表</h1>
-    <div class="ver" id="app-ver">ver 2026-09-25.26</div>
+    <div class="ver" id="app-ver">ver 2026-09-25.27</div>
   </div>
   <div class="row" style="margin-left:auto;">
     <select id="sh-off" class="fi" style="display:none;"></select>
@@ -225,7 +225,7 @@ document.dispatchEvent(new Event('fb-sdk-ready'));
 
 <script>
 'use strict';
-const APP_VER = '2026-09-25.26';
+const APP_VER = '2026-09-25.27';
 console.log('[シフト表] APP_VER', APP_VER);
 
 const FB_CONFIG = {
@@ -2767,16 +2767,43 @@ function printSheet(withSale){
   clone.querySelectorAll('[draggable]').forEach(el=>el.removeAttribute('draggable'));
   // 1列目の罫線を明示的に入れる（画面では影で描いているため）
   clone.querySelectorAll('tr > *:first-child').forEach(el=>{
+    const inBody = el.closest('tbody');
     el.setAttribute('style', (el.getAttribute('style')||'')
-      +'border-left:1px solid #999;border-right:1px solid #999;text-align:center;');
+      +`border-left:1px solid #999;border-right:1px solid #999;text-align:${inBody?'left':'center'};`);
     const box=el.querySelector('div');
-    if(box) box.setAttribute('style','display:flex;align-items:center;justify-content:center;gap:2px;');
+    if(box) box.setAttribute('style', inBody
+      ? 'display:flex;align-items:center;justify-content:flex-start;gap:2px;'
+      : 'display:flex;align-items:center;justify-content:center;gap:2px;');
   });
   // セール予定のカレンダー（任意）
+  // ★ 2026-09-25.27: セール予定は係数を出さず、白黒でも読めるように枠線と濃淡で表す
   let saleHtml='';
   if(withSale){
     const cal=document.querySelector('#sh-root > div:last-child');
-    if(cal) saleHtml=`<div style="page-break-before:always;">${cal.innerHTML}</div>`;
+    if(cal){
+      const c2=cal.cloneNode(true);
+      // 係数（％）の表示は消す
+      c2.querySelectorAll('div').forEach(el=>{
+        const t=(el.textContent||'').trim();
+        if(/^\d{2,3}%$/.test(t)) el.remove();
+      });
+      // バーは白地＋黒枠、大型セールは濃いグレーにする
+      c2.querySelectorAll('div[style*="border-radius:9px"]').forEach(el=>{
+        const st=el.getAttribute('style')||'';
+        const big=/#d9534f/.test(st);
+        el.setAttribute('style', st
+          .replace(/background:[^;]+;?/g,'')
+          .replace(/color:[^;]+;?/g,'')
+          + `background:${big?'#d9d9d9':'#f2f2f2'};color:#000;border:1px solid #666;`
+          + '-webkit-print-color-adjust:exact;print-color-adjust:exact;font-weight:normal;');
+      });
+      // 土日祝のマスも薄いグレーに
+      c2.querySelectorAll('div[style*="rgba(224,102,102"], div[style*="rgba(111,168,220"]').forEach(el=>{
+        const st=(el.getAttribute('style')||'').replace(/background:[^;]+;?/g,'');
+        el.setAttribute('style', st+'background:#eee;-webkit-print-color-adjust:exact;print-color-adjust:exact;');
+      });
+      saleHtml=`<div style="page-break-before:always;">${c2.innerHTML}</div>`;
+    }
   }
   const w=window.open('', '_blank');
   if(!w){ alert('印刷用の画面を開けませんでした。ポップアップの設定を確認してください。'); return; }
@@ -2793,7 +2820,9 @@ function printSheet(withSale){
       col.day{width:2.45%;}
       th,td{border:1px solid #999;padding:0 1px;text-align:center;overflow:hidden;
         white-space:nowrap;text-overflow:ellipsis;line-height:1.1;}
-      td:first-child,th:first-child{text-align:center;width:10%;}
+      th:first-child{text-align:center;width:10%;}
+      tbody td:first-child{text-align:left;width:10%;padding-left:3px;}
+      tfoot td:first-child{text-align:center;}
       thead th{vertical-align:middle;}
       thead th{background:#eee;}
       tbody tr{height:auto;}
