@@ -93,7 +93,7 @@
 <header>
   <div>
     <h1>大阪急配　シフト表</h1>
-    <div class="ver" id="app-ver">ver 2026-09-25.22</div>
+    <div class="ver" id="app-ver">ver 2026-09-25.23</div>
   </div>
   <div class="row" style="margin-left:auto;">
     <select id="sh-off" class="fi" style="display:none;"></select>
@@ -223,7 +223,7 @@ document.dispatchEvent(new Event('fb-sdk-ready'));
 
 <script>
 'use strict';
-const APP_VER = '2026-09-25.22';
+const APP_VER = '2026-09-25.23';
 console.log('[シフト表] APP_VER', APP_VER);
 
 const FB_CONFIG = {
@@ -2758,20 +2758,39 @@ function printSheet(withSale){
   // ★ 2026-09-25.22: A4横1枚に収める
   w.document.write(`<!doctype html><html><head><meta charset="utf-8"><title>${esc(office)} ${esc(mon)} シフト表</title>
     <style>
-      @page{size:A4 landscape;margin:6mm;}
-      body{font-family:sans-serif;margin:0;padding:0;}
-      h1{font-size:12px;margin:0 0 4px;}
-      table{border-collapse:collapse;table-layout:fixed;width:100%;font-size:8px;}
+      @page{size:A4 landscape;margin:5mm;}
+      html,body{margin:0;padding:0;font-family:sans-serif;}
+      h1{font-size:12px;margin:0 0 3px;}
+      /* ★ 2026-09-25.23: 人数が少なくても紙の高さいっぱいに、多くても1枚に収める */
+      #sheet{height:190mm;display:flex;flex-direction:column;}
+      table{border-collapse:collapse;table-layout:fixed;width:100%;height:100%;font-size:9px;}
       col.day{width:2.4%;}
-      th,td{border:1px solid #999;padding:1px 1px;text-align:center;overflow:hidden;
-        white-space:nowrap;text-overflow:ellipsis;line-height:1.15;}
-      td:first-child,th:first-child{text-align:left;width:9%;font-size:8px;}
+      th,td{border:1px solid #999;padding:0 1px;text-align:center;overflow:hidden;
+        white-space:nowrap;text-overflow:ellipsis;line-height:1.1;}
+      td:first-child,th:first-child{text-align:left;width:9%;}
       thead th{background:#eee;}
+      tbody tr{height:auto;}
       div[style*="grid-template-columns"]{font-size:8px;}
       .page{page-break-before:always;}
     </style></head><body>
-    <h1>${esc(office)}　${esc(mon)}　シフト表</h1>${clone.outerHTML}${saleHtml}
-    <script>window.onload=()=>window.print();<\/script></body></html>`);
+    <h1>${esc(office)}　${esc(mon)}　シフト表</h1>
+    <div id="sheet">${clone.outerHTML}</div>${saleHtml}
+    <script>
+      window.onload=()=>{
+        // 行数に応じて文字の大きさを調整し、1枚に収める
+        const t=document.querySelector('#sheet table');
+        const rows=t?t.querySelectorAll('tbody tr').length:0;
+        if(t){
+          let fs = rows<=8 ? 12 : rows<=12 ? 11 : rows<=16 ? 10 : rows<=22 ? 8.5 : 7;
+          t.style.fontSize=fs+'px';
+          const sheet=document.getElementById('sheet');
+          for(let i=0;i<12 && t.scrollHeight>sheet.clientHeight+2;i++){
+            fs=Math.max(5, fs-0.5); t.style.fontSize=fs+'px';
+          }
+        }
+        window.print();
+      };
+    <\/script></body></html>`);
   w.document.close();
 }
 window.cycle=cycle; window.weekly=weekly; window.save=save; window.printSheet=printSheet;
