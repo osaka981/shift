@@ -93,7 +93,7 @@
 <header>
   <div>
     <h1>大阪急配　シフト表</h1>
-    <div class="ver" id="app-ver">ver 2026-09-25.8</div>
+    <div class="ver" id="app-ver">ver 2026-09-25.12</div>
   </div>
   <div class="row" style="margin-left:auto;">
     <select id="sh-off" class="fi" style="display:none;"></select>
@@ -146,8 +146,8 @@
         <input type="file" id="fc-csv" accept=".csv,text/csv" style="display:none;" onchange="importSaleCsv(this)">
       </label>
       <button class="btn gh" onclick="checkLastYear()">前年で答え合わせ</button>
-      <!-- ★ 2026-09-25.8: シフトの操作ボタンはここに出す -->
-      <span id="sh-actions" class="row" style="gap:6px;flex-basis:100%;margin-top:6px;"></span>
+      <!-- ★ 2026-09-25.12: シフトの操作ボタンは同じ行に続ける -->
+      <span id="sh-actions" class="row" style="gap:6px;"></span>
       <span class="xs muted" id="fc-note" style="flex-basis:100%;"></span>
     </div>
   </div>
@@ -200,7 +200,7 @@ document.dispatchEvent(new Event('fb-sdk-ready'));
 
 <script>
 'use strict';
-const APP_VER = '2026-09-25.8';
+const APP_VER = '2026-09-25.12';
 console.log('[シフト表] APP_VER', APP_VER);
 
 const FB_CONFIG = {
@@ -411,8 +411,10 @@ async function clearOtherCell(k, otherOffice){
   const [who, day]=String(k).split('|');
   const all={...(D.shifts||{})};
   const rec=all[shKey(otherOffice,mon)];
+  let removed='';
   if(rec && rec.cells){
     const cells={...rec.cells};
+    removed = cells[`${who}|${day}`] || '';
     delete cells[`${who}|${day}`];
     // 旧いキー（従業員ID）も消す
     const st=(D.staff||[]).find(x=>String(x.empNo||x.id)===String(who));
@@ -425,7 +427,7 @@ async function clearOtherCell(k, otherOffice){
   {
     const rec2={...(all[shKey(otherOffice,mon)]||{office:otherOffice, mon, cells:{}})};
     const cleared={...(rec2.cleared||{})};
-    cleared[`${who}|${day}`]={by:office, at:new Date().toISOString()};
+    cleared[`${who}|${day}`]={by:office, at:new Date().toISOString(), v:removed};   // 元の値も覚えておく
     rec2.cleared=cleared;
     all[shKey(otherOffice,mon)]=rec2;
     D.shifts=all;
@@ -445,6 +447,29 @@ async function clearOtherCell(k, otherOffice){
   }
   render();
 }
+// 空にしたますを元に戻す（この営業所のますに戻す）
+async function restoreCleared(td){
+  const office=$('sh-off').value||'', mon=_ymNorm($('sh-mon').value||'');
+  let cl=null;
+  try{ cl=td.dataset.cleared?JSON.parse(td.dataset.cleared):null; }catch(e){}
+  if(!cl || !cl.v) return;
+  setWork(td.dataset.k, cl.v);
+  td.dataset.v=cl.v;
+  td.innerHTML=cellLabel(office, cl.v);
+  td.setAttribute('style', (td.dataset.bg||'')+cellStyle(cl.v));
+  // 注記を外す
+  const all={...(D.shifts||{})};
+  const rec={...(all[shKey(office,mon)]||{office, mon, cells:{}})};
+  const cleared={...(rec.cleared||{})};
+  delete cleared[td.dataset.k];
+  rec.cleared=cleared;
+  all[shKey(office,mon)]=rec;
+  D.shifts=all;
+  await fbSet('shifts', all);
+  markDirty();
+  render();
+}
+
 // 「要入力」の注記をまとめて消す
 async function clearClearedMarks(){
   const office=$('sh-off').value||'', mon=_ymNorm($('sh-mon').value||'');
@@ -825,7 +850,12 @@ function laneRowsHTML(mon, last){
 }
 function render(){
   const root=$('sh-root'); if(!root) return;
-  if(!$('sh-mon').value) $('sh-mon').value=new Date().toISOString().slice(0,7);
+  // ★ 2026-09-25.12: 当月20日を過ぎたら翌月を初期表示にする
+  if(!$('sh-mon').value){
+    const n=new Date();
+    const base=new Date(n.getFullYear(), n.getMonth() + (n.getDate()>20 ? 1 : 0), 1);
+    $('sh-mon').value=`${base.getFullYear()}-${String(base.getMonth()+1).padStart(2,'0')}`;
+  }
   const office=$('sh-off').value||'', mon=_ymNorm($('sh-mon').value||'');
   if(!office){ root.innerHTML='<div class="al al-w">営業所がまだ読み込めていません。少し待って再読み込みしてください。</div>'; return; }
   const staff=staffOf(office);
@@ -892,6 +922,7 @@ function render(){
       }).join('');
       tds+=`<td class="cell" tabindex="0" data-k="${key}" data-d="${d}" data-v="${v}" data-bg="${colBg[d]}"
         onclick="${colMode?`pickCourse(this)`:`cycle(this)`}" onkeydown="cellKey(event,this)"
+        data-cleared="${clearedOpen?esc(JSON.stringify({by:clearedInfo.by, v:clearedInfo.v||''})):''}"
         title="${clearedOpen?`${esc(clearedInfo.by)} から空にされました。入力するか、この注記を消してください`:''}"
         style="${colBg[d]}${cellStyle(v)}${clash?'box-shadow:inset 0 0 0 2px #d9534f;':(clearedOpen?'box-shadow:inset 0 0 0 99px rgba(224,139,31,.22), inset 0 0 0 2px #e08b1f;':'')}">${cellLabel(office, v)}${othersHtml}${clearedOpen?`<div class="xs" style="font-size:8.5px;line-height:1.1;color:#e08b1f;">要入力</div>`:''}</td>`;
     }
@@ -974,6 +1005,7 @@ function render(){
       ${dw.hasData?(dw.src&&dw.src.length?`（参照月 ${dw.src.join('・')} の実績）`:'（直近6か月の実績）'):'（実績が足りないため全曜日を同じ比率）'}。
       「対応（平均）」〜「対応（最大平均）」の幅に予測が収まっていれば足りている目安（橙字）。過不足の赤字は不足、青字は余力です。</div>`:''}
     ${colMode?'<div class="xs muted" style="margin-bottom:6px;">ますをタップすると、その日に回るコースを選べます。コースは「集荷コース」で作ります。</div>':''}
+    <div id="sh-alert-top"></div>
     <div class="xs muted" id="sh-scroll-hint" style="margin-bottom:4px;display:none;">表は横にスクロールできます。氏名の列は固定されます。</div>
     <div class="tw"><table id="sh-table" style="table-layout:fixed;width:${NAME_W+OFF_W+AVG_W+last*window._shColW}px;font-size:13px;">
       <colgroup>
@@ -982,23 +1014,26 @@ function render(){
         <col style="width:${OFF_W}px;"><col style="width:${AVG_W}px;">
       </colgroup>
       <thead>${head}</thead><tbody>${body}</tbody><tfoot>${foot}</tfoot></table></div>
-    ${clearedList.length?`<div class="al al-w" style="margin-top:8px;">
-      他の営業所からこの日のシフトを空にされています（橙色のます）：${esc(clearedList.slice(0,12).join('、'))}${clearedList.length>12?` ほか${clearedList.length-12}件`:''}
-      <button class="btn gh" style="margin-left:8px;padding:2px 8px;font-size:11px;" onclick="clearClearedMarks()">注記を消す</button>
-    </div>`:''}
-    ${conflicts.length?`<div class="al al-e" style="margin-top:8px;">同じ日に別の営業所と重なっています：${esc(conflicts.slice(0,12).join('、'))}${conflicts.length>12?` ほか${conflicts.length-12}件`:''}</div>`:''}
+
     ${holidayNoteHTML(mon, last)}
     ${saleListHTML(mon, saleMap)}
     ${colMode?courseSummaryHTML(office, mon, data):''}
     ${dowEditHTML(office, mon)}
     ${weightsHTML(colMode)}
     `;
+  // ★ 2026-09-25.9: 警告は日付の前（表の上）に出す
+  {
+    const box=$('sh-alert-top');
+    if(box) box.innerHTML =
+      (clearedList.length?`<div class="al al-w" style="margin-bottom:8px;">
+        他の営業所からこの日のシフトを空にされています（橙色のます）：${esc(clearedList.slice(0,12).join('、'))}${clearedList.length>12?` ほか${clearedList.length-12}件`:''}
+        <button class="btn gh" style="margin-left:8px;padding:2px 8px;font-size:11px;" onclick="clearClearedMarks()">注記を消す</button>
+      </div>`:'')
+      + (conflicts.length?`<div class="al al-e" style="margin-bottom:8px;">同じ日に別の営業所と重なっています：${esc(conflicts.slice(0,12).join('、'))}${conflicts.length>12?` ほか${conflicts.length-12}件`:''}</div>`:'');
+  }
   // 操作ボタンは上のカードに出す
   const act=$('sh-actions');
   if(act) act.innerHTML=`
-      <span class="xs muted" style="margin-right:auto;">${data.updatedAt?`確定 ${new Date(data.updatedAt).toLocaleString('ja-JP')}`:'未確定'}
-        ${draft?`<span style="color:var(--accent);font-weight:700;margin-left:8px;">下書きあり ${new Date(draft.updatedAt).toLocaleString('ja-JP')}</span>`:''}
-        <span id="sh-dirty" style="color:var(--amb);font-weight:700;margin-left:8px;">${_dirty?'未保存の入力があります':''}</span></span>
       ${colMode?'':`<button class="btn gh" onclick="fillAll('〇')">全員すべて〇</button>`}
       <button class="btn gh" onclick="fillAll('')">全員すべて削除</button>
       <button class="btn gh" onclick="toggleForecastRows()">${_hideForecast?'予測を表示':'予測を隠す'}</button>
@@ -1006,7 +1041,10 @@ function render(){
       <button class="btn gh" onclick="printSheet(false)">印刷（数量なし）</button>
       <button class="btn gh" onclick="printSheet(true)">印刷（セール予定つき）</button>
       <button class="btn gh" onclick="saveDraft()">下書き保存</button>
-      <button class="btn grn" onclick="save()">確定して保存</button>`;
+      <button class="btn grn" onclick="save()">確定して保存</button>
+      <span class="xs muted" style="flex-basis:100%;margin-top:4px;">${data.updatedAt?`確定 ${new Date(data.updatedAt).toLocaleString('ja-JP')}`:'未確定'}
+        ${draft?`<span style="color:var(--accent);font-weight:700;margin-left:8px;">下書きあり ${new Date(draft.updatedAt).toLocaleString('ja-JP')}</span>`:''}
+        <span id="sh-dirty" style="color:var(--amb);font-weight:700;margin-left:8px;">${_dirty?'未保存の入力があります':''}</span></span>`;
   renderMonTabs();
   refreshForecastInputs();
   // ★ 2026-09-24.8: スマホでは横スクロールの案内を出す
@@ -1297,9 +1335,18 @@ function pickCourse(td){
   const office=$('sh-off').value||'';
   const list=(D.courses||[]).filter(c=>!c.office || c.office===office);
   if(!list.length){ alert('コースがありません。「集荷コース」で作ってください。'); return; }
-  const items=[{value:'',label:'（空にする）'},{value:'×',label:'休み（×）'},
+  let items=[{value:'',label:'（空にする）'},{value:'×',label:'休み（×）'},
     ...list.map(c=>({value:'C:'+c.id, label:c.name}))];
+  // ★ 2026-09-25.10: 空にされたますは「元に戻す」も選べる
+  try{
+    const cl=td.dataset.cleared ? JSON.parse(td.dataset.cleared) : null;
+    if(cl && cl.v){
+      const lab = String(cl.v).startsWith('C:') ? (courseById(String(cl.v).slice(2))?.name || 'コース') : (SHIFT_LABEL[cl.v]||cl.v);
+      items=[{value:'__restore__', label:`元に戻す（${lab}）`}, ...items];
+    }
+  }catch(e){}
   openPickMenu(td, items, v=>{
+    if(v==='__restore__'){ restoreCleared(td); return; }
     setWork(td.dataset.k, v);
     td.dataset.v=v;
     td.innerHTML=cellLabel(office, v);
@@ -1365,7 +1412,19 @@ function cycle(td){
   if(cur===''){ next='〇'; }
   else if(cur==='〇'){ next='×'; }
   else {
-    openPickMenu(td, SHIFT_PICK.map(([v,l])=>({value:v, label:l})), v=>{
+    // ★ 2026-09-25.10: 空にされたますは、元の内容に戻す選択も出す
+    let items=SHIFT_PICK.map(([v,l])=>({value:v, label:l}));
+    try{
+      const cl=td.dataset.cleared ? JSON.parse(td.dataset.cleared) : null;
+      if(cl && cl.v){
+        const lab = String(cl.v).startsWith('C:')
+          ? (courseById(String(cl.v).slice(2))?.name || 'コース')
+          : (SHIFT_LABEL[cl.v] || cl.v);
+        items=[{value:'__restore__', label:`元に戻す（${lab}）`}, ...items];
+      }
+    }catch(e){}
+    openPickMenu(td, items, v=>{
+      if(v==='__restore__'){ restoreCleared(td); return; }
       setWork(td.dataset.k, v);
       td.dataset.v=v; td.textContent=SHIFT_LABEL[v]||'';
       td.setAttribute('style', (td.dataset.bg||'')+cellStyle(v));
@@ -2478,7 +2537,7 @@ window.addStop=addStop; window.moveStop=moveStop; window.delStop=delStop;
 window.addPostStop=addPostStop; window.pickPostStopOnMap=pickPostStopOnMap; window.addOriginStop=addOriginStop;
 window.moveCourseOffice=moveCourseOffice;
 window.toggleRowBtns=toggleRowBtns; window.toggleSaleBars=toggleSaleBars; window.toggleMute=toggleMute; window.openOtherMenu=openOtherMenu; window.clearOtherCell=clearOtherCell;
-window.clearClearedMarks=clearClearedMarks;
+window.clearClearedMarks=clearClearedMarks; window.restoreCleared=restoreCleared;
 window.openZoom=openZoom; window.closeZoom=closeZoom; window.zoomTab=zoomTab; window.setStopU=setStopU; window.holdStopU=holdStopU; window.moveStopU=moveStopU; window.delStopU=delStopU; window.startFixPos=startFixPos;
 window.saveWeights=saveWeights; window.pickOnMap=pickOnMap;
 window.csDragStart=csDragStart; window.csDragOver=csDragOver; window.csDrop=csDrop; window.csDragEnd=csDragEnd;
