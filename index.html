@@ -93,7 +93,7 @@
 <header>
   <div>
     <h1>大阪急配　シフト表</h1>
-    <div class="ver" id="app-ver">ver 2026-09-25.24</div>
+    <div class="ver" id="app-ver">ver 2026-09-25.25</div>
   </div>
   <div class="row" style="margin-left:auto;">
     <select id="sh-off" class="fi" style="display:none;"></select>
@@ -112,6 +112,8 @@
     <button class="btn gh" id="tg-hdr" onclick="toggleHeader()">ヘッダー</button>
     <button class="btn gh" id="tg-btns" onclick="toggleRowBtns()">操作ボタン</button>
     <button class="btn gh" id="tg-bars" onclick="toggleSaleBars()">セール帯</button>
+    <button class="btn gh" id="tg-extras" onclick="toggleExtras()">休・人数</button>
+    <button class="btn gh" id="tg-empno" onclick="toggleEmpNo()">社員番号</button>
     <button class="btn gh" onclick="openZoom('shift')">拡大</button>
     <span class="xs muted">並べて編集</span>
     <select id="sh-off2" class="fi" style="width:auto;" onchange="render()"></select>
@@ -223,7 +225,7 @@ document.dispatchEvent(new Event('fb-sdk-ready'));
 
 <script>
 'use strict';
-const APP_VER = '2026-09-25.24';
+const APP_VER = '2026-09-25.25';
 console.log('[シフト表] APP_VER', APP_VER);
 
 const FB_CONFIG = {
@@ -557,6 +559,11 @@ function hiddenOf(office){ return (D.settings?.hidden||{})[office] || []; }
 let _showHidden=false;
 let _hideRowBtns = (()=>{ try{ return localStorage.getItem('shift_hide_btns')==='1'; }catch(e){ return false; } })();
 let _hideSaleBars = (()=>{ try{ return localStorage.getItem('shift_hide_bars')==='1'; }catch(e){ return false; } })();
+// ★ 2026-09-25.25: 休・人数・社員番号は既定で非表示
+let _showExtras = (()=>{ try{ return localStorage.getItem('shift_show_extras')==='1'; }catch(e){ return false; } })();
+let _showEmpNo  = (()=>{ try{ return localStorage.getItem('shift_show_empno')==='1'; }catch(e){ return false; } })();
+function toggleExtras(){ _showExtras=!_showExtras; try{ localStorage.setItem('shift_show_extras', _showExtras?'1':'0'); }catch(e){} render(); }
+function toggleEmpNo(){ _showEmpNo=!_showEmpNo; try{ localStorage.setItem('shift_show_empno', _showEmpNo?'1':'0'); }catch(e){} render(); }
 // ★ 2026-09-25.14: ヘッダー（営業所・月・画面のタブ）の折りたたみ
 let _hideHeader = (()=>{ try{ return localStorage.getItem('shift_hide_hdr')==='1'; }catch(e){ return false; } })();
 function applyHeaderState(){
@@ -988,10 +995,10 @@ function renderPane(paneOffice, rootId, isMain){
   const W='日月火水木金土';
   // ★ 2026-09-24.22: 列幅を先に決める（帯の文字数もこの幅に合わせる）
   // ★ 2026-09-24.24: 氏名欄を広げ（ボタンが切れないように）、日付の列も広めにする
-  const NAME_W=_hideRowBtns?112:200, OFF_W=44, AVG_W=72;
+  const NAME_W=_hideRowBtns?112:200, OFF_W=_showExtras?44:0, AVG_W=72;
   {
     const avail=(document.querySelector('.wrap')?.clientWidth||window.innerWidth)-40;
-    window._shColW=Math.max(34, Math.floor((avail-NAME_W-OFF_W-AVG_W)/last));
+    window._shColW=Math.max(34, Math.floor((avail-NAME_W-(_showExtras?44:0)-72*2)/last));
   }
   const data=shGet(office, mon);
   const draft=draftGet(office, mon);
@@ -1015,7 +1022,7 @@ function renderPane(paneOffice, rootId, isMain){
     const col=(dow===0||hol)?'color:#e06666;':dow===6?'color:#6fa8dc;':'';
     head+=`<th title="${esc(hol)}" style="${col}${colBg[d]}overflow:hidden;">${d}<div class="xs" style="${col}">${W[dow]}</div></th>`;
   }
-  head+='<th>休</th><th class="num">平均持出</th><th class="num">最大平均</th></tr>';
+  head+=(_showExtras?'<th>休</th>':'')+'<th class="num">平均持出</th><th class="num">最大平均</th></tr>';
   let body='';
   const conflicts=[];
   const clearedList=[];
@@ -1058,7 +1065,7 @@ function renderPane(paneOffice, rootId, isMain){
           <span class="muted" draggable="true" title="ここをドラッグで並べ替え"
             ondragstart="shRowDragStart(event,'${_k}')" ondragend="shRowDragEnd(event)"
             style="cursor:grab;padding:0 2px;">⠿</span>
-          <div>${esc(st.name)}<div class="xs muted mono">${esc(st.empNo||'')}</div></div>
+          <div>${esc(st.name)}${_showEmpNo?`<div class="xs muted mono">${esc(st.empNo||'')}</div>`:''}</div>
           ${_hideRowBtns?'':`
           <button type="button" draggable="false" class="btn gh" style="margin-left:auto;padding:2px 5px;font-size:10px;${colMode?'opacity:.4;':''}"
             title="${colMode?'集荷はコースを選ぶため使いません':'この人をすべて〇にする'}" onclick="event.stopPropagation();fillRow('${_k}','〇')">〇</button>
@@ -1069,7 +1076,7 @@ function renderPane(paneOffice, rootId, isMain){
         </div>
       </td>
       ${tds}
-      <td class="off">${off}</td>
+      ${_showExtras?`<td class="off">${off}</td>`:''}
       <td class="num">${av.avg}${av.isNew?'<div class="xs" style="color:var(--amb)">新人</div>':''}</td>
       <td class="num">${av.max5}</td>
     </tr>`;
@@ -1080,13 +1087,13 @@ function renderPane(paneOffice, rootId, isMain){
   const total=Number(fc.total)||0;
   const saleMap=_saleFactorMap(mon);
   const plan=total?spreadByDow(total, mon, dw.f, saleMap):[];
-  let foot='<tr><td>人数</td>';
+  let foot=_showExtras?'<tr><td>人数</td>':'';
   for(let d=1; d<=last; d++){
     let n=0;
     staff.forEach(st=>{ n += cellWeight(cellGet(data.cells, st, d, work), wgt); });
-    foot+=`<td class="people" data-d="${d}" style="${colBg[d]}">${n?Math.round(n*10)/10:''}</td>`;
+    if(_showExtras) foot+=`<td class="people" data-d="${d}" style="${colBg[d]}">${n?Math.round(n*10)/10:''}</td>`;
   }
-  foot+='<td></td><td class="num"></td><td class="num"></td></tr>';
+  if(_showExtras) foot+='<td></td><td class="num"></td><td class="num"></td></tr>';
   if(total && !_hideForecast){
     // 能力＝その日の（平均持出×重み）の合計
     const avgMap={}, maxMap={};
@@ -1116,11 +1123,12 @@ function renderPane(paneOffice, rootId, isMain){
       r3b+=`<td class="num" style="${need?c2:''}">${need?(diffMax>0?'+':'')+diffMax:''}</td>`;
     }
     const sumPlan=plan.reduce((a,b)=>a+b,0);
-    r1+=`<td></td><td class="num">${sumPlan.toLocaleString()}</td><td class="num"></td></tr>`;
-    r2+=`<td></td><td class="num">${sumCap.toLocaleString()}</td><td class="num"></td></tr>`;
-    r2b+=`<td></td><td class="num"></td><td class="num">${sumCapMax.toLocaleString()}</td></tr>`;
-    r3+='<td></td><td class="num"></td><td class="num"></td></tr>';
-    r3b+='<td></td><td class="num"></td><td class="num"></td></tr>';
+    const pad=_showExtras?'<td></td>':'';
+    r1+=`${pad}<td class="num">${sumPlan.toLocaleString()}</td><td class="num"></td></tr>`;
+    r2+=`${pad}<td class="num">${sumCap.toLocaleString()}</td><td class="num"></td></tr>`;
+    r2b+=`${pad}<td class="num"></td><td class="num">${sumCapMax.toLocaleString()}</td></tr>`;
+    r3+=`${pad}<td class="num"></td><td class="num"></td></tr>`;
+    r3b+=`${pad}<td class="num"></td><td class="num"></td></tr>`;
     foot+=r1+r2+r2b+r3+r3b;
   }
   root.innerHTML=`
@@ -1130,11 +1138,11 @@ function renderPane(paneOffice, rootId, isMain){
     ${colMode?'<div class="xs muted" style="margin-bottom:6px;">ますをタップすると、その日に回るコースを選べます。コースは「集荷コース」で作ります。</div>':''}
     <div id="sh-alert-top"></div>
     <div class="xs muted" id="sh-scroll-hint" style="margin-bottom:4px;display:none;">表は横にスクロールできます。氏名の列は固定されます。</div>
-    <div class="tw"><table id="sh-table" style="table-layout:fixed;width:${NAME_W+OFF_W+AVG_W+last*window._shColW}px;font-size:13px;">
+    <div class="tw"><table id="sh-table" style="table-layout:fixed;width:${NAME_W+OFF_W+AVG_W*2+last*window._shColW}px;font-size:13px;">
       <colgroup>
         <col style="width:${NAME_W}px;">
         ${Array.from({length:last},()=>`<col style="width:${window._shColW}px;">`).join('')}
-        <col style="width:${OFF_W}px;"><col style="width:${AVG_W}px;">
+        ${_showExtras?`<col style="width:${OFF_W}px;">`:''}<col style="width:${AVG_W}px;"><col style="width:${AVG_W}px;">
       </colgroup>
       <thead>${head}</thead><tbody>${body}</tbody><tfoot>${foot}</tfoot></table></div>
 
@@ -2752,11 +2760,15 @@ function printSheet(withSale){
     }
     el.setAttribute('style', st);
   });
-  // 氏名の欄から⠿（ドラッグの印）を取り除く
+  // ★ 2026-09-25.25: ⠿ は消さず、印刷では隠すだけ（列の形は保つ）
   clone.querySelectorAll('tbody tr td:first-child span').forEach(sp=>{
-    if((sp.textContent||'').trim()==='⠿') sp.remove();
+    if((sp.textContent||'').trim()==='⠿') sp.className='hide-print';
   });
   clone.querySelectorAll('[draggable]').forEach(el=>el.removeAttribute('draggable'));
+  // 1列目の罫線を明示的に入れる（画面では影で描いているため）
+  clone.querySelectorAll('tr > *:first-child').forEach(el=>{
+    el.setAttribute('style', (el.getAttribute('style')||'')+'border-left:1px solid #999;border-right:1px solid #999;');
+  });
   // セール予定のカレンダー（任意）
   let saleHtml='';
   if(withSale){
@@ -2781,6 +2793,7 @@ function printSheet(withSale){
       thead th{background:#eee;}
       tbody tr{height:auto;}
       div[style*="grid-template-columns"]{font-size:8px;}
+      .hide-print{display:none;}
       .page{page-break-before:always;}
     </style></head><body>
     <h1>${esc(office)}　${esc(mon)}　シフト表</h1>
@@ -2791,10 +2804,15 @@ function printSheet(withSale){
         const t=document.querySelector('#sheet table');
         const rows=t?t.querySelectorAll('tbody tr').length:0;
         if(t){
-          let fs = rows<=8 ? 12 : rows<=12 ? 11 : rows<=16 ? 10 : rows<=22 ? 8.5 : 7;
-          t.style.fontSize=fs+'px';
           const sheet=document.getElementById('sheet');
-          for(let i=0;i<12 && t.scrollHeight>sheet.clientHeight+2;i++){
+          let fs = rows<=8 ? 11 : rows<=12 ? 10 : rows<=16 ? 9 : rows<=22 ? 8 : 7;
+          t.style.fontSize=fs+'px';
+          // 1行が太くなりすぎないよう上限（26px）を設け、余った分は下に余白として残す
+          const maxRow=26;
+          const avail=sheet.clientHeight;
+          const wanted=Math.min(avail, rows*maxRow+60);
+          t.style.height=wanted+'px';
+          for(let i=0;i<14 && t.scrollHeight>avail+2;i++){
             fs=Math.max(5, fs-0.5); t.style.fontSize=fs+'px';
           }
         }
@@ -2814,7 +2832,7 @@ window.addPostStop=addPostStop; window.pickPostStopOnMap=pickPostStopOnMap; wind
 window.moveCourseOffice=moveCourseOffice;
 window.toggleRowBtns=toggleRowBtns; window.toggleSaleBars=toggleSaleBars; window.toggleMute=toggleMute;
 window.toggleHeader=toggleHeader; window.fitTableHeight=fitTableHeight; window.toggleBelowPanel=toggleBelowPanel;
-window.toggleBelow2=toggleBelow2; window.applyYoy2=applyYoy2; window.saveForecast2=saveForecast2;
+window.toggleBelow2=toggleBelow2; window.toggleExtras=toggleExtras; window.toggleEmpNo=toggleEmpNo; window.applyYoy2=applyYoy2; window.saveForecast2=saveForecast2;
 window.save2=save2; window.saveDraft2=saveDraft2; window.renderPane=renderPane; window.openOtherMenu=openOtherMenu; window.clearOtherCell=clearOtherCell;
 window.clearClearedMarks=clearClearedMarks; window.restoreCleared=restoreCleared; window.toggleFcPanel=toggleFcPanel;
 window.openZoom=openZoom; window.closeZoom=closeZoom; window.zoomTab=zoomTab; window.setStopU=setStopU; window.holdStopU=holdStopU; window.moveStopU=moveStopU; window.delStopU=delStopU; window.startFixPos=startFixPos;
