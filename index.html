@@ -93,7 +93,7 @@
 <header>
   <div>
     <h1>大阪急配　シフト表</h1>
-    <div class="ver" id="app-ver">ver 2026-09-24.50</div>
+    <div class="ver" id="app-ver">ver 2026-09-24.52</div>
   </div>
   <div class="row" style="margin-left:auto;">
     <select id="sh-off" class="fi" style="display:none;"></select>
@@ -198,7 +198,7 @@ document.dispatchEvent(new Event('fb-sdk-ready'));
 
 <script>
 'use strict';
-const APP_VER = '2026-09-24.50';
+const APP_VER = '2026-09-24.52';
 console.log('[シフト表] APP_VER', APP_VER);
 
 const FB_CONFIG = {
@@ -389,6 +389,12 @@ let _showHidden=false;
 let _hideRowBtns = (()=>{ try{ return localStorage.getItem('shift_hide_btns')==='1'; }catch(e){ return false; } })();
 let _hideSaleBars = (()=>{ try{ return localStorage.getItem('shift_hide_bars')==='1'; }catch(e){ return false; } })();
 function toggleRowBtns(){ _hideRowBtns=!_hideRowBtns; try{ localStorage.setItem('shift_hide_btns', _hideRowBtns?'1':'0'); }catch(e){} render(); }
+let _hideForecast = (()=>{ try{ return localStorage.getItem('shift_hide_fc')==='1'; }catch(e){ return false; } })();
+function toggleForecastRows(){
+  _hideForecast=!_hideForecast;
+  try{ localStorage.setItem('shift_hide_fc', _hideForecast?'1':'0'); }catch(e){}
+  render();
+}
 function toggleSaleBars(){ _hideSaleBars=!_hideSaleBars; try{ localStorage.setItem('shift_hide_bars', _hideSaleBars?'1':'0'); }catch(e){} render(); }
 function staffOf(office, all){
   const list=(D.staff||[]).filter(s=>{
@@ -525,13 +531,18 @@ function dowFactors(office, mon){
   });
   const avg=sum.map((s,i)=>cnt[i]?s/cnt[i]:0);
   const used=avg.filter(v=>v>0);
-  if(!used.length) return {f:[1,1,1,1,1,1,1], hasData:false, src:src};
+  const ovAll=(D.settings?.dowOverride||{})[office]||{};
+  // ★ 2026-09-24.52: 実績が無くても、手入力の係数は使う
+  if(!used.length){
+    const hasOv=Object.keys(ovAll).length>0;
+    const f0=[0,1,2,3,4,5,6].map(i => (ovAll[i]!=null && ovAll[i]!=='') ? Number(ovAll[i])/100 : 1);
+    return {f:f0, hasData:hasOv, src:src, ov:ovAll};
+  }
   const mean=used.reduce((a,b)=>a+b,0)/used.length;
   let f=avg.map(v=>v>0?v/mean:0);
   // 手で上書きした係数があれば、それを優先する（％で保存）
-  const ov=(D.settings?.dowOverride||{})[office]||{};
-  f=f.map((v,i)=> (ov[i]!=null && ov[i]!=='') ? Number(ov[i])/100 : v);
-  return {f, hasData:true, src:src, ov};
+  f=f.map((v,i)=> (ovAll[i]!=null && ovAll[i]!=='') ? Number(ovAll[i])/100 : v);
+  return {f, hasData:true, src:src, ov:ovAll};
 }
 // 前年同月の実績合計
 function lastYearTotal(office, mon){
@@ -764,7 +775,7 @@ function render(){
     foot+=`<td class="people" data-d="${d}" style="${colBg[d]}">${n?Math.round(n*10)/10:''}</td>`;
   }
   foot+='<td></td><td class="num"></td><td class="num"></td></tr>';
-  if(total){
+  if(total && !_hideForecast){
     // 能力＝その日の（平均持出×重み）の合計
     const avgMap={}, maxMap={};
     staff.forEach(st=>{ const a=avgMochidashi(st, mon); avgMap[st.id]=a.avg; maxMap[st.id]=a.max5; });
@@ -824,8 +835,10 @@ function render(){
         <span id="sh-dirty" style="color:var(--amb);font-weight:700;margin-left:8px;">${_dirty?'未保存の入力があります':''}</span></span>
       ${colMode?'':'<button class="btn gh" onclick="fillAll(\'〇\')">全員すべて〇</button>'}
       <button class="btn gh" onclick="fillAll('')">全員すべて削除</button>
+      <button class="btn gh" onclick="toggleForecastRows()">${_hideForecast?'予測を表示':'予測を隠す'}</button>
       <button class="btn gh" onclick="weekly()">曜日で一括設定</button>
-      <button class="btn gh" onclick="printSheet()">印刷（数量なし）</button>
+      <button class="btn gh" onclick="printSheet(false)">印刷（数量なし）</button>
+      <button class="btn gh" onclick="printSheet(true)">印刷（セール予定つき）</button>
       <button class="btn gh" onclick="saveDraft()">下書き保存</button>
       <button class="btn grn" onclick="save()">確定して保存</button>
     </div>`;
@@ -1022,6 +1035,27 @@ function dowEditHTML(office, mon){
   const dw=dowFactors(office, mon);
   const W=['日','月','火','水','木','金','土'];
   const ov=(D.settings?.dowOverride||{})[office]||{};
+  // ★ 2026-09-24.52: 曜日ごとに、その月で何個ずつ割り振られたかを出す
+  const data=shGet(office, mon);
+  const total=Number(data.forecast?.total)||0;
+  const [yy,mm]=mon.split('-').map(Number);
+  const lastD=new Date(yy,mm,0).getDate();
+  const plan=total?spreadByDow(total, mon, dw.f, _saleFactorMap(mon)):[];
+  const sumByDow=[0,0,0,0,0,0,0], cntByDow=[0,0,0,0,0,0,0];
+  for(let d=1; d<=lastD; d++){
+    const iso=`${mon}-${String(d).padStart(2,'0')}`;
+    let slot;
+    if(holidayName(iso)) slot=0;
+    else {
+      const dt=new Date(iso+'T00:00:00');
+      const prev=new Date(dt.getFullYear(), dt.getMonth(), dt.getDate()-1);
+      const pIso=`${prev.getFullYear()}-${String(prev.getMonth()+1).padStart(2,'0')}-${String(prev.getDate()).padStart(2,'0')}`;
+      slot = holidayName(pIso) ? 1 : dt.getDay();
+    }
+    sumByDow[slot]+=(plan[d-1]||0);
+    cntByDow[slot]++;
+  }
+  const planTotal=plan.reduce((a,b)=>a+b,0);
   return `<div class="row" style="margin-top:12px;gap:6px;align-items:center;flex-wrap:wrap;">
     <span class="xs fw7">曜日の係数（％）</span>
     ${W.map((w,i)=>`<span class="xs muted">${w}</span>
@@ -1029,7 +1063,18 @@ function dowEditHTML(office, mon){
         value="${ov[i]!=null&&ov[i]!==''?ov[i]:Math.round((dw.f[i]||0)*100)}">`).join('')}
     <button class="btn gh" onclick="saveDowOverride()">係数を保存</button>
     <button class="btn gh" onclick="clearDowOverride()">実績に戻す</button>
-    <span class="xs muted" style="flex-basis:100%;">実績から出した値が入っています。実感と違う場合は数字を直して保存してください（祝日は日曜、祝日の翌日は月曜として計算します）。</span>
+    <span class="xs muted" style="flex-basis:100%;">係数は「平均を100%としたときの重み」です。月の合計は必ず予測の合計になるよう割り戻します（祝日は日曜、祝日の翌日は月曜として計算します）。</span>
+    ${total?`<div style="flex-basis:100%;margin-top:6px;">
+      <div class="tw" style="max-height:none;"><table>
+        <thead><tr><th>曜日</th>${W.map(w=>`<th>${w}</th>`).join('')}<th>合計</th></tr></thead>
+        <tbody>
+          <tr><td style="text-align:left;">この月の日数</td>${cntByDow.map(v=>`<td>${v}日</td>`).join('')}<td>${lastD}日</td></tr>
+          <tr><td style="text-align:left;">割り振り（個）</td>${sumByDow.map(v=>`<td>${v.toLocaleString()}</td>`).join('')}<td class="fw7">${planTotal.toLocaleString()}</td></tr>
+          <tr><td style="text-align:left;">1日あたり</td>${sumByDow.map((v,i)=>`<td>${cntByDow[i]?Math.round(v/cntByDow[i]).toLocaleString():''}</td>`).join('')}<td></td></tr>
+          <tr><td style="text-align:left;">全体に占める割合</td>${sumByDow.map(v=>`<td>${planTotal?Math.round(v/planTotal*100):0}%</td>`).join('')}<td class="fw7">100%</td></tr>
+        </tbody></table></div>
+      <div class="xs muted" style="margin-top:4px;">祝日は日曜の欄、祝日の翌日は月曜の欄に入ります。セールの係数も反映した後の数字です。</div>
+    </div>`:'<span class="xs muted" style="flex-basis:100%;">月の予測合計を入れると、曜日ごとの割り振り（個数）が出ます。</span>'}
   </div>`;
 }
 async function saveDowOverride(){
@@ -1260,7 +1305,9 @@ async function save(){
     const v=td.dataset.v||''; if(v) cells[td.dataset.k]=v;
   });
   const all={...(D.shifts||{})};
-  all[shKey(office,mon)]={office, mon, cells, updatedAt:new Date().toISOString()};
+  // ★ 2026-09-24.51: 予測（月合計・昨対）は保存で消さない
+  const prev=all[shKey(office,mon)]||{};
+  all[shKey(office,mon)]={...prev, office, mon, cells, updatedAt:new Date().toISOString()};
   D.shifts=all;
   const ok=await fbSet('shifts', all);
   // 確定したら下書きは消す
@@ -1478,6 +1525,18 @@ function showHelp(){
   alert('ますの入力\n・1回目のタップ → 〇（終日）\n・2回目 → ×（休み）\n・3回目 → 便の指定をリストから選ぶ（①②③のみ／〜①〜②／②〜）\n\n人数の数え方\n終日1・〜②0.6・②〜0.6・①②③0.3（重みは表の下で変えられます）\n\n氏名は左の⠿をドラッグすると並べ替えできます。');
 }
 function setView(v){
+  // ★ 2026-09-24.51: 集荷コースは集荷の営業所で扱う
+  if(v==='course' && !isColOffice($('sh-off')?.value||'')){
+    const col=(D.locations||[]).find(l=>l && l.active!==false && isColOffice(l.name));
+    if(col){
+      const sel=$('sh-off');
+      if(sel && ![...sel.options].some(x=>x.value===col.name)){
+        const op=document.createElement('option'); op.value=col.name; op.textContent=col.name; sel.appendChild(op);
+      }
+      if(sel) sel.value=col.name;
+      renderOffTabs();
+    }
+  }
   _view=v;
   $('shift-wrap').style.display = v==='shift' ? '' : 'none';
   $('course-wrap').style.display = v==='course' ? '' : 'none';
@@ -2161,11 +2220,23 @@ function drawMap(c){
   setTimeout(()=>{ try{ _csMap.invalidateSize(); }catch(e){} }, 100);
 }
 
-function printSheet(){
+function printSheet(withSale){
   const office=$('sh-off').value||'', mon=_ymNorm($('sh-mon').value||'');
   const tbl=$('sh-table'); if(!tbl) return;
   const clone=tbl.cloneNode(true);
+  // 数量の列・予測の行は印刷しない
   clone.querySelectorAll('.num').forEach(el=>el.remove());
+  clone.querySelectorAll('tfoot tr').forEach(tr=>{
+    const h=(tr.cells[0]?.textContent||'');
+    if(h.startsWith('予測')||h.startsWith('対応')||h.startsWith('過不足')) tr.remove();
+  });
+  clone.querySelectorAll('button, input, select').forEach(el=>el.remove());
+  // セール予定のカレンダー（任意）
+  let saleHtml='';
+  if(withSale){
+    const cal=document.querySelector('#sh-root > div:last-child');
+    if(cal) saleHtml=`<div style="page-break-before:always;">${cal.innerHTML}</div>`;
+  }
   const w=window.open('', '_blank');
   if(!w){ alert('印刷用の画面を開けませんでした。ポップアップの設定を確認してください。'); return; }
   w.document.write(`<!doctype html><html><head><meta charset="utf-8"><title>${esc(office)} ${esc(mon)} シフト表</title>
@@ -2174,7 +2245,7 @@ function printSheet(){
     th,td{border:1px solid #999;padding:2px 3px;text-align:center;}
     td:first-child,th:first-child{text-align:left;white-space:nowrap;}
     @page{size:A4 landscape;margin:8mm;}</style></head><body>
-    <h1>${esc(office)}　${esc(mon)}　シフト表</h1>${clone.outerHTML}
+    <h1>${esc(office)}　${esc(mon)}　シフト表</h1>${clone.outerHTML}${saleHtml}
     <script>window.onload=()=>window.print();<\/script></body></html>`);
   w.document.close();
 }
