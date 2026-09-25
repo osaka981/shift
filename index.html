@@ -93,7 +93,7 @@
 <header>
   <div>
     <h1>大阪急配　シフト表</h1>
-    <div class="ver" id="app-ver">ver 2026-09-25.14</div>
+    <div class="ver" id="app-ver">ver 2026-09-25.15</div>
   </div>
   <div class="row" style="margin-left:auto;">
     <select id="sh-off" class="fi" style="display:none;"></select>
@@ -110,6 +110,8 @@
     <button class="btn gh" id="tg-bars" onclick="toggleSaleBars()">セール帯</button>
     <button class="btn gh" onclick="openZoom('shift')">拡大</button>
     <button class="btn gh" id="tg-hdr" onclick="toggleHeader()">ヘッダー</button>
+    <span class="xs muted">並べて編集</span>
+    <select id="sh-off2" class="fi" style="width:auto;" onchange="render()"></select>
     <button class="btn gh" id="th-dark" title="背景を黒に" onclick="setTheme('dark')">黒</button>
     <button class="btn gh" id="th-light" title="背景を白に" onclick="setTheme('light')">白</button>
     <button class="btn gh" title="使い方" onclick="showHelp()">？</button>
@@ -162,6 +164,16 @@
     <div class="card">
       <div id="sh-root"><div class="al al-w">読み込み中です…</div></div>
     </div>
+    <div class="card" id="pane2" style="display:none;">
+      <div class="row" style="justify-content:space-between;margin-bottom:6px;">
+        <div class="xs fw7" id="pane2-title"></div>
+        <div class="row" style="gap:6px;">
+          <button class="btn gh" onclick="saveDraft2()">下書き保存</button>
+          <button class="btn grn" onclick="save2()">確定して保存</button>
+        </div>
+      </div>
+      <div id="sh-root2"></div>
+    </div>
   </div>
   <div id="course-wrap" style="display:none;">
     <div class="card">
@@ -207,7 +219,7 @@ document.dispatchEvent(new Event('fb-sdk-ready'));
 
 <script>
 'use strict';
-const APP_VER = '2026-09-25.14';
+const APP_VER = '2026-09-25.15';
 console.log('[シフト表] APP_VER', APP_VER);
 
 const FB_CONFIG = {
@@ -557,11 +569,18 @@ function toggleHeader(){
 }
 // 3) 表の高さを画面に合わせて固定（表の中だけスクロールする）
 function fitTableHeight(){
+  const two = $('pane2') && $('pane2').style.display!=='none';
   const tw=document.querySelector('#sh-root .tw');
-  if(!tw) return;
-  const top=tw.getBoundingClientRect().top;
-  const h=Math.max(240, window.innerHeight - top - 16);
-  tw.style.maxHeight=h+'px';
+  if(tw){
+    const top=tw.getBoundingClientRect().top;
+    const h=Math.max(180, (window.innerHeight - top - 16) / (two?2.1:1));
+    tw.style.maxHeight=h+'px';
+  }
+  const tw2=document.querySelector('#sh-root2 .tw');
+  if(tw2 && two){
+    const h2=Math.max(180, (window.innerHeight - 160) / 2.1);
+    tw2.style.maxHeight=h2+'px';
+  }
 }
 function toggleRowBtns(){ _hideRowBtns=!_hideRowBtns; try{ localStorage.setItem('shift_hide_btns', _hideRowBtns?'1':'0'); }catch(e){} render(); }
 let _hideForecast = (()=>{ try{ return localStorage.getItem('shift_hide_fc')==='1'; }catch(e){ return false; } })();
@@ -889,15 +908,26 @@ function laneRowsHTML(mon, last){
   });
   return html;
 }
+// ★ 2026-09-25.15: 2つの営業所を上下に並べて編集できるようにする
 function render(){
-  const root=$('sh-root'); if(!root) return;
+  const office=$('sh-off')?.value||'';
+  renderPane(office, 'sh-root', true);
+  const off2=$('sh-off2')?.value||'';
+  const wrap2=$('pane2');
+  if(wrap2) wrap2.style.display = (off2 && off2!==office) ? '' : 'none';
+  const t2=$('pane2-title'); if(t2) t2.textContent = off2 ? `${off2}（並べて編集）` : '';
+  if(off2 && off2!==office) renderPane(off2, 'sh-root2', false);
+  setTimeout(fitTableHeight, 0);
+}
+function renderPane(paneOffice, rootId, isMain){
+  const root=$(rootId); if(!root) return;
   // ★ 2026-09-25.12: 当月20日を過ぎたら翌月を初期表示にする
   if(!$('sh-mon').value){
     const n=new Date();
     const base=new Date(n.getFullYear(), n.getMonth() + (n.getDate()>20 ? 1 : 0), 1);
     $('sh-mon').value=`${base.getFullYear()}-${String(base.getMonth()+1).padStart(2,'0')}`;
   }
-  const office=$('sh-off').value||'', mon=_ymNorm($('sh-mon').value||'');
+  const office=paneOffice, mon=_ymNorm($('sh-mon').value||'');
   if(!office){ root.innerHTML='<div class="al al-w">営業所がまだ読み込めていません。少し待って再読み込みしてください。</div>'; return; }
   const staff=staffOf(office);
   if(!staff.length){ root.innerHTML=`<div class="al al-w">${esc(office)} に所属する従事員が台帳にありません。</div>`; return; }
@@ -961,7 +991,7 @@ function render(){
           onclick="event.stopPropagation();openOtherMenu(this,'${muteKey(st,d)}','${esc(o.office)}',${muted})"
           style="font-size:9.5px;line-height:1.15;cursor:pointer;font-weight:700;color:${bad?'#d9534f':'var(--txt)'};${muted?'opacity:.3;font-weight:400;text-decoration:line-through;':''}">${esc(shortOffice(o.office))}${SHIFT_LABEL[o.v]||(String(o.v).startsWith('C:')?'コ':'')}</div>`;
       }).join('');
-      tds+=`<td class="cell" tabindex="0" data-k="${key}" data-d="${d}" data-v="${v}" data-bg="${colBg[d]}"
+      tds+=`<td class="cell" tabindex="0" data-k="${key}" data-d="${d}" data-v="${v}" data-bg="${colBg[d]}" data-off="${esc(office)}"
         onclick="${colMode?`pickCourse(this)`:`cycle(this)`}" onkeydown="cellKey(event,this)"
         data-cleared="${clearedOpen?esc(JSON.stringify({by:clearedInfo.by, v:clearedInfo.v||''})):''}"
         title="${clearedOpen?`${esc(clearedInfo.by)} から空にされました。入力するか、この注記を消してください`:''}"
@@ -1391,9 +1421,9 @@ function pickCourse(td){
   }catch(e){}
   openPickMenu(td, items, v=>{
     if(v==='__restore__'){ restoreCleared(td); return; }
-    setWork(td.dataset.k, v);
+    setWork(td.dataset.k, v, td.dataset.off);
     td.dataset.v=v;
-    td.innerHTML=cellLabel(office, v);
+    td.innerHTML=cellLabel(td.dataset.off||office, v);
     td.setAttribute('style', (td.dataset.bg||'')+cellStyle(v));
     markDirty(); recalc();
   });
@@ -1469,14 +1499,14 @@ function cycle(td){
     }catch(e){}
     openPickMenu(td, items, v=>{
       if(v==='__restore__'){ restoreCleared(td); return; }
-      setWork(td.dataset.k, v);
+      setWork(td.dataset.k, v, td.dataset.off);
       td.dataset.v=v; td.textContent=SHIFT_LABEL[v]||'';
       td.setAttribute('style', (td.dataset.bg||'')+cellStyle(v));
       markDirty(); recalc();
     });
     return;
   }
-  setWork(td.dataset.k, next);
+  setWork(td.dataset.k, next, td.dataset.off);
   td.dataset.v=next; td.textContent=SHIFT_LABEL[next]||'';
   td.setAttribute('style', (td.dataset.bg||'')+cellStyle(next));
   markDirty(); recalc();
@@ -1499,7 +1529,7 @@ function recalc(){
 }
 // ★ 2026-09-24.14: まとめて入れる・消す
 function _applyCell(td, v){
-  setWork(td.dataset.k, v);
+  setWork(td.dataset.k, v, td.dataset.off);
   td.dataset.v=v;
   td.innerHTML=cellLabel($('sh-off').value||'', v);
   td.setAttribute('style', (td.dataset.bg||'')+cellStyle(v));
@@ -1539,7 +1569,7 @@ function weekly(){
       const d=Number(String(td.dataset.k).split('|')[1]);
       const dow=new Date(`${mon}-${String(d).padStart(2,'0')}T00:00:00`).getDay();
       if(!dows.includes(dow)) return;
-      setWork(td.dataset.k, c);
+      setWork(td.dataset.k, c, td.dataset.off);
       td.dataset.v=c; td.textContent=SHIFT_LABEL[c]||'';
       td.setAttribute('style', (td.dataset.bg||'')+cellStyle(c));
       markDirty();
@@ -1548,6 +1578,37 @@ function weekly(){
   recalc();
 }
 // ★ 2026-09-24.35: 下書き保存（画面の内容をそのまま残す。経営管理・日報アプリには出ない）
+// 2枚目の営業所の保存
+async function save2(){ return saveOffice($('sh-off2')?.value||'', 'sh-root2', false); }
+async function saveDraft2(){ return saveOffice($('sh-off2')?.value||'', 'sh-root2', true); }
+async function saveOffice(office, rootId, asDraft){
+  const mon=_ymNorm($('sh-mon').value||'');
+  if(!office||!mon) return;
+  const cells={};
+  document.querySelectorAll(`#${rootId} .cell`).forEach(td=>{
+    const v=td.dataset.v||''; if(v) cells[td.dataset.k]=v;
+  });
+  if(asDraft){
+    const all={...(D.drafts||{})};
+    all[shKey(office,mon)]={office, mon, cells, updatedAt:new Date().toISOString()};
+    D.drafts=all;
+    const ok=await fbSet('shift_drafts', all);
+    clearWork(office, mon); render();
+    alert(ok?`${office} を下書き保存しました`:'サーバーへの保存に失敗しました');
+    return;
+  }
+  const all={...(D.shifts||{})};
+  const prev=all[shKey(office,mon)]||{};
+  const cleared={...(prev.cleared||{})};
+  Object.keys(cleared).forEach(k=>{ if(cells[k]) delete cleared[k]; });
+  all[shKey(office,mon)]={...prev, office, mon, cells, cleared, updatedAt:new Date().toISOString()};
+  D.shifts=all;
+  const ok=await fbSet('shifts', all);
+  const dr={...(D.drafts||{})};
+  if(dr[shKey(office,mon)]){ delete dr[shKey(office,mon)]; D.drafts=dr; await fbSet('shift_drafts', dr); }
+  clearWork(office, mon); render();
+  alert(ok?`${office} ${mon} のシフトを確定しました`:'サーバーへの保存に失敗しました');
+}
 async function saveDraft(){
   const office=$('sh-off').value||'', mon=_ymNorm($('sh-mon').value||'');
   if(!office||!mon) return;
@@ -1781,8 +1842,8 @@ function initTheme(){
 // ★ 2026-09-24.32: 入力中の内容を保持する（画面の作り直しでも消えない）
 let _work={};
 function workKey(){ return shKey($('sh-off')?.value||'', _ymNorm($('sh-mon')?.value||'')); }
-function setWork(k, v){
-  const wk=workKey();
+function setWork(k, v, office){
+  const wk=office ? shKey(office, _ymNorm($('sh-mon')?.value||'')) : workKey();
   _work[wk]=_work[wk]||{};
   _work[wk][k]=v;
 }
@@ -1885,6 +1946,14 @@ function pickMonth(ym){
   if(_view==='course') renderCourse(); else render();
 }
 function renderOffTabs(){
+  // 並べて編集の候補
+  const sel2=$('sh-off2');
+  if(sel2){
+    const cur2=sel2.value;
+    const names=[...new Set([...delOffices(), ...(D.locations||[]).filter(l=>l&&l.active!==false).map(l=>l.name)])];
+    sel2.innerHTML='<option value="">なし</option>'+names.map(n=>`<option value="${esc(n)}">${esc(n)}</option>`).join('');
+    if(cur2 && names.includes(cur2)) sel2.value=cur2;
+  }
   const box=$('off-tabs'); if(!box) return;
   const offs=delOffices();
   const cols=(D.locations||[]).filter(l=>l && l.active!==false && !offs.includes(l.name)).map(l=>l.name);
@@ -2581,7 +2650,8 @@ window.addStop=addStop; window.moveStop=moveStop; window.delStop=delStop;
 window.addPostStop=addPostStop; window.pickPostStopOnMap=pickPostStopOnMap; window.addOriginStop=addOriginStop;
 window.moveCourseOffice=moveCourseOffice;
 window.toggleRowBtns=toggleRowBtns; window.toggleSaleBars=toggleSaleBars; window.toggleMute=toggleMute;
-window.toggleHeader=toggleHeader; window.fitTableHeight=fitTableHeight; window.openOtherMenu=openOtherMenu; window.clearOtherCell=clearOtherCell;
+window.toggleHeader=toggleHeader; window.fitTableHeight=fitTableHeight;
+window.save2=save2; window.saveDraft2=saveDraft2; window.renderPane=renderPane; window.openOtherMenu=openOtherMenu; window.clearOtherCell=clearOtherCell;
 window.clearClearedMarks=clearClearedMarks; window.restoreCleared=restoreCleared; window.toggleFcPanel=toggleFcPanel;
 window.openZoom=openZoom; window.closeZoom=closeZoom; window.zoomTab=zoomTab; window.setStopU=setStopU; window.holdStopU=holdStopU; window.moveStopU=moveStopU; window.delStopU=delStopU; window.startFixPos=startFixPos;
 window.saveWeights=saveWeights; window.pickOnMap=pickOnMap;
