@@ -93,7 +93,7 @@
 <header>
   <div>
     <h1>大阪急配　シフト表</h1>
-    <div class="ver" id="app-ver">ver 2026-09-25.2</div>
+    <div class="ver" id="app-ver">ver 2026-09-25.5</div>
   </div>
   <div class="row" style="margin-left:auto;">
     <select id="sh-off" class="fi" style="display:none;"></select>
@@ -198,7 +198,7 @@ document.dispatchEvent(new Event('fb-sdk-ready'));
 
 <script>
 'use strict';
-const APP_VER = '2026-09-25.2';
+const APP_VER = '2026-09-25.5';
 console.log('[シフト表] APP_VER', APP_VER);
 
 const FB_CONFIG = {
@@ -804,13 +804,18 @@ function render(){
       const v=cellGet(data.cells, st, d, work);
       if(v==='×') off++;
       // 他の営業所の出勤（表示だけ。消すこともできる）
-      const others=otherOfficeEntries(office, mon, st, d).filter(o=>!isMuted(data, st, d, o.office));
+      // ★ 2026-09-25.3: 非表示にしたものは消さず、薄く表示して印刷から外す
+      const others=otherOfficeEntries(office, mon, st, d);
       const mine=binsOf(v);
-      const clash=others.some(o=>binsOf(o.v).some(b=>mine.includes(b)));
+      const clash=others.some(o=>!isMuted(data, st, d, o.office) && binsOf(o.v).some(b=>mine.includes(b)));
       if(clash) conflicts.push(`${st.name} ${d}日`);
-      const othersHtml=others.map(o=>`<div class="oth" title="${esc(o.office)}（クリックで非表示）"
-        onclick="event.stopPropagation();toggleMute('${muteKey(st,d)}','${esc(o.office)}')"
-        style="font-size:9px;line-height:1.1;color:${clash?'#d9534f':'var(--txt2)'};cursor:pointer;">${esc(shortOffice(o.office))}${SHIFT_LABEL[o.v]||(String(o.v).startsWith('C:')?'コ':'')}</div>`).join('');
+      const othersHtml=others.map(o=>{
+        const muted=isMuted(data, st, d, o.office);
+        const bad=!muted && binsOf(o.v).some(b=>mine.includes(b));
+        return `<div class="oth${muted?' oth-muted':''}" title="${esc(o.office)}（クリックで${muted?'印刷に出す':'印刷から外す'}）"
+          onclick="event.stopPropagation();toggleMute('${muteKey(st,d)}','${esc(o.office)}')"
+          style="font-size:9px;line-height:1.1;cursor:pointer;color:${bad?'#d9534f':'var(--txt2)'};${muted?'opacity:.35;text-decoration:line-through;':''}">${esc(shortOffice(o.office))}${SHIFT_LABEL[o.v]||(String(o.v).startsWith('C:')?'コ':'')}</div>`;
+      }).join('');
       tds+=`<td class="cell" tabindex="0" data-k="${key}" data-d="${d}" data-v="${v}" data-bg="${colBg[d]}"
         onclick="${colMode?`pickCourse(this)`:`cycle(this)`}" onkeydown="cellKey(event,this)"
         style="${colBg[d]}${cellStyle(v)}${clash?'box-shadow:inset 0 0 0 2px #d9534f;':''}">${cellLabel(office, v)}${othersHtml}</td>`;
@@ -1560,6 +1565,12 @@ async function geocodeAddress(addr){
 }
 // ★ 2026-09-24.11: 出発地点の既定（本社）。営業所に位置が無いときはここから計算する
 const DEFAULT_ORIGIN = {name:'本社（堺市北区常磐町3-12-5）', addr:'堺市北区常磐町3-12-5', lat:34.5566, lng:135.4970};
+// ★ 2026-09-25.4: コースごとの出発地点（設定が無ければ営業所→本社の順）
+function courseOrigin(c, office){
+  if(c && c.origin && Number(c.origin.lat))
+    return {name:c.origin.name||c.origin.addr||'出発地点', addr:c.origin.addr||'', lat:Number(c.origin.lat), lng:Number(c.origin.lng), own:true};
+  return originOf(office);
+}
 function originOf(office){
   const o=officePos(office);
   if(o && o.lat) return o;
@@ -1601,7 +1612,7 @@ function confirmLeave(){
 }
 window.addEventListener('beforeunload', e=>{ if(_dirty){ e.preventDefault(); e.returnValue=''; } });
 function showHelp(){
-  alert('ますの入力\n・1回目のタップ → 〇（終日）\n・2回目 → ×（休み）\n・3回目 → 便の指定をリストから選ぶ（①②③のみ／〜①〜②／②〜）\n\n人数の数え方\n終日1・〜②0.6・②〜0.6・①②③0.3（重みは表の下で変えられます）\n\n氏名は左の⠿をドラッグすると並べ替えできます。');
+  alert('他の営業所の出勤は、ますの中に小さく出ます。クリックすると薄くなり、印刷には出ません（画面では見えたままです）。もう一度クリックで戻ります。\n\nますの入力\n・1回目のタップ → 〇（終日）\n・2回目 → ×（休み）\n・3回目 → 便の指定をリストから選ぶ（①②③のみ／〜①〜②／②〜）\n\n人数の数え方\n終日1・〜②0.6・②〜0.6・①②③0.3（重みは表の下で変えられます）\n\n氏名は左の⠿をドラッグすると並べ替えできます。');
 }
 function setView(v){
   // ★ 2026-09-24.51: 集荷コースは集荷の営業所で扱う
@@ -1773,8 +1784,8 @@ function custPos(id){
 //   本社ロジで積む顧客（ASLAJ・福澤など）は「出発地点（本社）」を選べる。地図で個別に指定もできる。
 function stopPos(st, office){
   if(st.type==='origin'){
-    const o=originOf(office);
-    return {lat:o.lat, lng:o.lng, name:'本社（戻る）', addr:o.addr||''};
+    const o=courseOrigin(curCourse(), office);
+    return {lat:o.lat, lng:o.lng, name:'出発地点（戻る）', addr:o.addr||''};
   }
   if(st.type==='post'){
     const p=officePos(st.postName);
@@ -1803,7 +1814,7 @@ function calcCourse(c){
   const speed=Number($('cs-speed')?.value)||25;
   const workDef=Number($('cs-work')?.value)||10;
   const postWork=Number($('cs-post-work')?.value)||20;
-  const start=originOf($('sh-off').value||'');
+  const start=courseOrigin(c, $('sh-off').value||'');
   // ★ 2026-09-24.46: 分は小数のまま積み上げ、表示のときだけ丸める（距離と時間がずれないように）
   let t=hm2min(c.depart||'10:00');
   let prev=start, km=0;
@@ -1844,7 +1855,12 @@ function calcCourse(c){
     t+=mv;
     rows.push({name:`${start.name}（帰社）`, arrive:min2hm(Math.round(t)), leave:'', move:showMove(d,mv), wait:0, work:0, km:d, back:true});
   }
-  return {rows, endMin:Math.round(t), km, totalMin:Math.round(t-hm2min(c.depart||'10:00'))};
+  // ★ 2026-09-25.5: 移動・待ち・作業の合計も返す
+  const sumMove=rows.reduce((a,r)=>a+(r.move||0),0);
+  const sumWait=rows.reduce((a,r)=>a+(r.wait||0),0);
+  const sumWork=rows.reduce((a,r)=>a+(r.work||0),0);
+  return {rows, endMin:Math.round(t), km, totalMin:Math.round(t-hm2min(c.depart||'10:00')),
+    sumMove, sumWait, sumWork, stops:(c.stops||[]).length};
 }
 function ensureUid(c){
   (c.stops||[]).forEach(st=>{ if(!st.uid) st.uid='s'+Math.random().toString(36).slice(2,9); });
@@ -1873,8 +1889,8 @@ function renderCourse(selId){
   ensureUid(c);
   const r=calcCourse(c);
   // ★ 2026-09-24.7: 営業所の位置が無いと、1件目までの移動が0分になる
-  const startPos=originOf($('sh-off').value||'');
-  const usingDefault = !(officePos($('sh-off').value||'')||{}).lat;
+  const startPos=courseOrigin(c, $('sh-off').value||'');
+  const usingDefault = !startPos.own && !(officePos($('sh-off').value||'')||{}).lat;
   const startWarn = usingDefault
     ? `<div class="al al-w" style="margin-bottom:8px;">出発地点は <b>${esc(startPos.addr||startPos.name)}</b> で計算しています。営業所から出る場合は、経営管理の郵便局一覧でその営業所の位置を登録してください。</div>` : '';
   const opts=(D.customers||[]).slice().sort((a,b)=>String(a.custNo||'').localeCompare(String(b.custNo||'')))
@@ -1886,8 +1902,10 @@ function renderCourse(selId){
   root.innerHTML=startWarn+`
     <div class="row" style="margin-bottom:8px;gap:6px;align-items:center;">
       <span class="xs muted">出発地点</span>
-      <input type="text" id="cs-origin" class="fi" style="width:260px;"
-        value="${esc((D.settings?.origin?.addr)||DEFAULT_ORIGIN.addr)}" placeholder="住所">
+      <input type="text" id="cs-origin" class="fi" style="width:240px;"
+        value="${esc(startPos.own ? (startPos.addr||startPos.name) : ((D.settings?.origin?.addr)||DEFAULT_ORIGIN.addr))}" placeholder="住所">
+      <label class="xs muted" style="display:inline-flex;align-items:center;gap:4px;">
+        <input type="checkbox" id="cs-origin-own" ${startPos.own?'checked':''} onchange="toggleCourseOrigin(this.checked)">このコースだけ</label>
       <button class="btn gh" onclick="setOrigin()">住所から位置を取得</button>
       <button class="btn gh" onclick="pickOriginOnMap()">地図で指定</button>
       <span class="xs muted" id="cs-origin-pos">${startPos.lat?`現在 ${Number(startPos.lat).toFixed(5)}, ${Number(startPos.lng).toFixed(5)}${startPos.name?`（${esc(startPos.name)}）`:''}`:'位置なし'}</span>
@@ -1950,7 +1968,21 @@ function renderCourse(selId){
         <td class="mono">${esc(row.arrive||'')}</td><td class="mono">${esc(row.leave||'')}</td>
         <td class="mono xs">${row.move||0}分</td><td></td><td class="mono xs">${row.work?row.work+'分':''}</td>
         <td class="mono xs">${(row.km||0).toFixed(1)}km</td><td></td></tr>`).join('')}
+      <tfoot><tr style="background:var(--bg3);font-weight:700;">
+        <td colspan="6" style="text-align:right;">合計</td>
+        <td class="mono">${r.sumMove}分</td>
+        <td class="mono" style="${r.sumWait?'color:#e08b1f;':''}">${r.sumWait}分</td>
+        <td class="mono">${r.sumWork}分</td>
+        <td class="mono">${r.km.toFixed(1)}km</td>
+        <td></td>
+      </tr></tfoot>
     </table></div>
+    <div class="xs muted" style="margin-top:6px;">
+      立ち寄り ${r.stops}件／移動 ${Math.floor(r.sumMove/60)}時間${String(r.sumMove%60).padStart(2,'0')}分・
+      待ち ${Math.floor(r.sumWait/60)}時間${String(r.sumWait%60).padStart(2,'0')}分・
+      作業 ${Math.floor(r.sumWork/60)}時間${String(r.sumWork%60).padStart(2,'0')}分／
+      走行 約${r.km.toFixed(1)}km／所要 ${Math.floor(r.totalMin/60)}時間${String(r.totalMin%60).padStart(2,'0')}分
+    </div>
     <div class="row" style="margin-top:8px;">
       <select id="cs-add" class="fi" style="max-width:280px;">${opts}</select>
       <button class="btn gh" onclick="addStop()">顧客を追加</button>
@@ -1963,12 +1995,26 @@ function renderCourse(selId){
   drawMap(c);
 }
 // ★ 2026-09-24.40: 出発地点を住所から設定して保存する
+function toggleCourseOrigin(on){
+  const c=curCourse(); if(!c) return;
+  if(on){
+    const base=originOf($('sh-off').value||'');
+    c.origin={addr:($('cs-origin')?.value.trim()||base.addr||''), name:base.name||'', lat:base.lat, lng:base.lng};
+  } else { delete c.origin; }
+  renderCourse();
+}
 async function setOrigin(){
   const addr=$('cs-origin')?.value.trim()||'';
   if(!addr){ alert('住所を入れてください'); return; }
+  const own=!!$('cs-origin-own')?.checked;
   const hint=$('cs-origin-pos'); if(hint) hint.textContent='検索中…';
   const pos=await geocodeAddress(addr);
   if(!pos){ if(hint) hint.textContent='位置を取れませんでした'; alert('住所から位置を取れませんでした。番地を省いた住所でも試してみてください。'); return; }
+  if(own){
+    const c=curCourse();
+    if(c){ c.origin={addr, name:addr, lat:pos.lat, lng:pos.lng}; await saveCourses(); renderCourse(); }
+    return;
+  }
   const st={...(D.settings||{})};
   st.origin={addr, lat:pos.lat, lng:pos.lng, name:addr};
   D.settings=st;
@@ -2148,6 +2194,11 @@ async function useFound(kind){
   if(!_foundPos){ alert('先に検索してください。'); return; }
   const {lat,lng,label}=_foundPos;
   if(kind==='origin'){
+    if($('cs-origin-own')?.checked){
+      const c=curCourse();
+      if(c){ c.origin={addr:($('cs-origin')?.value.trim()||label||''), name:'このコースの出発地点', lat, lng}; await saveCourses(); renderCourse(); showFound(_foundPos); }
+      return;
+    }
     const st={...(D.settings||{})};
     st.origin={...(st.origin||{}), addr:($('cs-origin')?.value.trim()||label||''), lat, lng, name:'出発地点'};
     D.settings=st;
@@ -2187,6 +2238,11 @@ async function _onMapClick(e){
     const t=_pickTarget; _pickTarget=null;
     const lat=Number(e.latlng.lat.toFixed(6)), lng=Number(e.latlng.lng.toFixed(6));
     if(t.kind==='origin'){
+      if($('cs-origin-own')?.checked){
+        const c=curCourse();
+        if(c){ c.origin={addr:($('cs-origin')?.value.trim()||''), name:'このコースの出発地点', lat, lng}; await saveCourses(); renderCourse(); }
+        return;
+      }
       const st={...(D.settings||{})};
       st.origin={...(st.origin||{}), addr:($('cs-origin')?.value.trim()||DEFAULT_ORIGIN.addr), lat, lng, name:'出発地点'};
       D.settings=st;
@@ -2263,7 +2319,7 @@ function drawMap(c){
   if(typeof L==='undefined') return;
   const el=$('cs-map'); if(!el) return;
   if(!_csMap){
-    const o=originOf($('sh-off')?.value||'');
+    const o=courseOrigin(curCourse(), $('sh-off')?.value||'');
     _csMap=L.map(el).setView([o.lat||34.5731, o.lng||135.4829], 12);
     L.tileLayer('https://tile.openstreetmap.org/{z}/{x}/{y}.png',
       {maxZoom:18, attribution:'© OpenStreetMap'}).addTo(_csMap);
@@ -2272,7 +2328,7 @@ function drawMap(c){
   if(_csLayer){ _csMap.removeLayer(_csLayer); _csLayer=null; }
   if(!c) return;
   const pts=[];
-  const start=originOf($('sh-off').value||'');
+  const start=courseOrigin(c, $('sh-off').value||'');
   const group=[];
   if(start && start.lat){ pts.push([start.lat,start.lng]);
     group.push(L.marker([start.lat,start.lng]).bindPopup(`${start.name}（営業所）`)); }
@@ -2310,6 +2366,7 @@ function printSheet(withSale){
     if(h.startsWith('予測')||h.startsWith('対応')||h.startsWith('過不足')) tr.remove();
   });
   clone.querySelectorAll('button, input, select').forEach(el=>el.remove());
+  clone.querySelectorAll('.oth-muted').forEach(el=>el.remove());   // 印刷しない指定のもの
   // セール予定のカレンダー（任意）
   let saleHtml='';
   if(withSale){
@@ -2346,7 +2403,7 @@ window.hideStaff=hideStaff; window.showStaff=showStaff; window.toggleShowHidden=
 window.saleBarsHTML=saleBarsHTML; window.showHelp=showHelp; window.setTheme=setTheme; window.cellKey=cellKey;
 window.saveDraft=saveDraft; window.saveDowOverride=saveDowOverride; window.clearDowOverride=clearDowOverride;
 window.pickMonth=pickMonth; window.setOrigin=setOrigin;
-window.pickOriginOnMap=pickOriginOnMap; window.pickPostOnMap=pickPostOnMap;
+window.pickOriginOnMap=pickOriginOnMap; window.toggleCourseOrigin=toggleCourseOrigin; window.pickPostOnMap=pickPostOnMap;
 window.mapSearch=mapSearch; window.useFound=useFound;
 window.holdDepart=holdDepart; window.holdStop=holdStop; window.commitCourseEdit=commitCourseEdit; window.fillAll=fillAll; window.fillRow=fillRow;
 
