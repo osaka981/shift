@@ -93,7 +93,7 @@
 <header>
   <div>
     <h1>大阪急配　シフト表</h1>
-    <div class="ver" id="app-ver">ver 2026-09-25.7</div>
+    <div class="ver" id="app-ver">ver 2026-09-25.8</div>
   </div>
   <div class="row" style="margin-left:auto;">
     <select id="sh-off" class="fi" style="display:none;"></select>
@@ -146,6 +146,8 @@
         <input type="file" id="fc-csv" accept=".csv,text/csv" style="display:none;" onchange="importSaleCsv(this)">
       </label>
       <button class="btn gh" onclick="checkLastYear()">前年で答え合わせ</button>
+      <!-- ★ 2026-09-25.8: シフトの操作ボタンはここに出す -->
+      <span id="sh-actions" class="row" style="gap:6px;flex-basis:100%;margin-top:6px;"></span>
       <span class="xs muted" id="fc-note" style="flex-basis:100%;"></span>
     </div>
   </div>
@@ -198,7 +200,7 @@ document.dispatchEvent(new Event('fb-sdk-ready'));
 
 <script>
 'use strict';
-const APP_VER = '2026-09-25.7';
+const APP_VER = '2026-09-25.8';
 console.log('[シフト表] APP_VER', APP_VER);
 
 const FB_CONFIG = {
@@ -990,19 +992,21 @@ function render(){
     ${colMode?courseSummaryHTML(office, mon, data):''}
     ${dowEditHTML(office, mon)}
     ${weightsHTML(colMode)}
-    <div class="row" style="justify-content:flex-end;margin-top:10px;">
+    `;
+  // 操作ボタンは上のカードに出す
+  const act=$('sh-actions');
+  if(act) act.innerHTML=`
       <span class="xs muted" style="margin-right:auto;">${data.updatedAt?`確定 ${new Date(data.updatedAt).toLocaleString('ja-JP')}`:'未確定'}
         ${draft?`<span style="color:var(--accent);font-weight:700;margin-left:8px;">下書きあり ${new Date(draft.updatedAt).toLocaleString('ja-JP')}</span>`:''}
         <span id="sh-dirty" style="color:var(--amb);font-weight:700;margin-left:8px;">${_dirty?'未保存の入力があります':''}</span></span>
-      ${colMode?'':'<button class="btn gh" onclick="fillAll(\'〇\')">全員すべて〇</button>'}
+      ${colMode?'':`<button class="btn gh" onclick="fillAll('〇')">全員すべて〇</button>`}
       <button class="btn gh" onclick="fillAll('')">全員すべて削除</button>
       <button class="btn gh" onclick="toggleForecastRows()">${_hideForecast?'予測を表示':'予測を隠す'}</button>
       <button class="btn gh" onclick="weekly()">曜日で一括設定</button>
       <button class="btn gh" onclick="printSheet(false)">印刷（数量なし）</button>
       <button class="btn gh" onclick="printSheet(true)">印刷（セール予定つき）</button>
       <button class="btn gh" onclick="saveDraft()">下書き保存</button>
-      <button class="btn grn" onclick="save()">確定して保存</button>
-    </div>`;
+      <button class="btn grn" onclick="save()">確定して保存</button>`;
   renderMonTabs();
   refreshForecastInputs();
   // ★ 2026-09-24.8: スマホでは横スクロールの案内を出す
