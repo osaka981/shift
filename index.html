@@ -93,7 +93,7 @@
 <header>
   <div>
     <h1>大阪急配　シフト表</h1>
-    <div class="ver" id="app-ver">ver 2026-09-25.27</div>
+    <div class="ver" id="app-ver">ver 2026-11-13.28</div>
   </div>
   <div class="row" style="margin-left:auto;">
     <select id="sh-off" class="fi" style="display:none;"></select>
@@ -225,7 +225,7 @@ document.dispatchEvent(new Event('fb-sdk-ready'));
 
 <script>
 'use strict';
-const APP_VER = '2026-09-25.27';
+const APP_VER = '2026-11-13.28';
 console.log('[シフト表] APP_VER', APP_VER);
 
 const FB_CONFIG = {
@@ -240,8 +240,88 @@ const FB_CONFIG = {
 
 const $ = id => document.getElementById(id);
 const esc = v => String(v==null?'':v).replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
-const lsGet = (k, d) => { try{ const v=localStorage.getItem(k); return v?JSON.parse(v):d; }catch(e){ return d; } };
-const lsSet = (k, v) => { try{ localStorage.setItem(k, JSON.stringify(v)); }catch(e){} };
+/* ════════════════════════════════════════════════════════════
+   ★ 2026-11-13.28: 経営管理・日報アプリの IndexedDB も読む
+
+   経営管理は大きなデータ（名簿・日報・顧客・拠点・部署・営業所）を
+   localStorage から IndexedDB（nikki_mgmt）へ移し、localStorage からは
+   片付けた。日報アプリも同じく nikki_report へ移した。
+   このアプリは localStorage しか見ていなかったので、どれも空になった。
+
+   Firebase から直接読もうとすると、このアプリは匿名ログインのため
+   /nikki/staff_full・locations・departments・delivery・customers が
+   permission_denied で弾かれる（台帳には口座・単価が入っているので、
+   匿名で読めるようにするのは避けたい）。
+   同じ端末にある経営管理の控えを読むのがいちばん安全で、
+   これまでと同じ動きに戻る。内勤・管理者の端末で使う前提。
+   ════════════════════════════════════════════════════════════ */
+const _mem = Object.create(null);
+let _memReady = false;
+
+/* 経営管理・日報アプリが IndexedDB で持っているもの。
+   ここから localStorage へ書き戻すと、せっかく空けた容量がまた埋まり、
+   経営管理の片付けと綱引きになるので書かない。 */
+const _IDB_OWNED = ['nikki_staff_full','nikki_delivery','nikki_customers',
+                    'nikki_locations','nikki_offices','nikki_departments','nikki_shifts'];
+
+function _idbReadAll(dbName){
+  return new Promise(res=>{
+    let done=false; const fin=v=>{ if(!done){ done=true; res(v); } };
+    setTimeout(()=>fin(0), 5000);            // 返事が無いときは諦める
+    try{
+      if(!window.indexedDB) return fin(0);
+      const rq = indexedDB.open(dbName);     // 版は指定しない（今ある版を開く）
+      rq.onerror   = ()=>fin(0);
+      rq.onblocked = ()=>fin(0);
+      /* そのアプリを一度も開いていない端末では、ここで空のDBを作ってしまう。
+         作らずに諦める。 */
+      rq.onupgradeneeded = e=>{ try{ e.target.transaction.abort(); }catch(e5){} fin(0); };
+      rq.onsuccess = e=>{
+        const db = e.target.result;
+        try{
+          if(!db.objectStoreNames.contains('kv')){ db.close(); return fin(0); }
+          let n=0;
+          const cur = db.transaction('kv','readonly').objectStore('kv').openCursor();
+          cur.onsuccess = ev=>{
+            const c = ev.target.result;
+            if(!c){ try{db.close();}catch(e6){} return fin(n); }
+            try{
+              const key = String(c.key), v = c.value;
+              if(_mem[key] === undefined){           // 先に読んだほう（経営管理）を優先
+                _mem[key] = (typeof v === 'string') ? v : JSON.stringify(v);
+                n++;
+              }
+            }catch(e2){}
+            c.continue();
+          };
+          cur.onerror = ()=>{ try{db.close();}catch(e7){} fin(n); };
+        }catch(e3){ try{db.close();}catch(e4){} fin(0); }
+      };
+    }catch(e){ fin(0); }
+  });
+}
+
+async function _idbBoot(){
+  let a=0, b=0;
+  try{ a = await _idbReadAll('nikki_mgmt');   }catch(e){}
+  try{ b = await _idbReadAll('nikki_report'); }catch(e){}
+  _memReady = true;
+  console.log('[控え] IndexedDB から読み込みました　経営管理 '+a+'件 / 日報アプリ '+b+'件');
+  if(!a) console.warn('[控え] 経営管理の控えが見つかりません。この端末で一度 経営管理 を開いてください。');
+  return a+b;
+}
+
+const lsGet = (k, d) => {
+  if(_memReady && _mem[k] !== undefined){
+    try{ const v=_mem[k]; return v ? JSON.parse(v) : d; }catch(e){ /* 壊れていたら下へ */ }
+  }
+  try{ const v=localStorage.getItem(k); return v?JSON.parse(v):d; }catch(e){ return d; }
+};
+const lsSet = (k, v) => {
+  try{ _mem[k] = JSON.stringify(v); }catch(e){}
+  if(_IDB_OWNED.indexOf(k) >= 0) return;     // 控えは IndexedDB 側に任せる
+  try{ localStorage.setItem(k, JSON.stringify(v)); }catch(e){}
+};
 const _ymNorm = v => String(v||'').replace(/\//g,'-').slice(0,7);
 
 // ── データ（経営管理と同じFirebaseを見る） ──
@@ -2894,6 +2974,36 @@ if(window._fbImports) initFirebase();
 initTheme();
 fillOffices();
 renderMonTabs();
+
+/* ★ 2026-11-13.28: IndexedDB を読み終えたら、空のまま作られた D に入れ直す。
+   D はこのファイルの読み込み時に作られるが、IndexedDB は後から読めるため。
+   すでに Firebase から届いているものは触らない。 */
+_idbBoot().then(()=>{
+  const empty = v => v==null
+    || (Array.isArray(v) ? !v.length : (typeof v==='object' ? !Object.keys(v).length : false));
+  const fill = (key, lsKey, def) => {
+    if(!empty(D[key])) return 0;                 // Firebaseが先に届いていれば触らない
+    const v = lsGet(lsKey, def);
+    if(empty(v)) return 0;
+    D[key] = v; return 1;
+  };
+  let n = 0;
+  n += fill('staff',      'nikki_staff_full',    []);
+  n += fill('locations',  'nikki_locations',     []);
+  n += fill('departments','nikki_departments',   []);
+  n += fill('delivery',   'nikki_delivery',      []);
+  n += fill('customers',  'nikki_customers',     []);
+  n += fill('offices',    'nikki_offices',       []);
+  n += fill('courses',    'nikki_col_courses',   []);
+  n += fill('shifts',     'nikki_shifts',        {});
+  n += fill('settings',   'nikki_shift_settings',{});
+  n += fill('drafts',     'nikki_shift_drafts',  {});
+  n += fill('saleEvents', 'nikki_sale_events',   []);
+  console.log('[控え] 画面に入れ直しました '+n+'種類　従事員 '+(D.staff||[]).length+'名');
+  try{ fillOffices(); }catch(e){}
+  try{ render(); }catch(e){}
+  try{ if(_view==='course' && typeof renderCourse==='function') renderCourse(); }catch(e){}
+}).catch(e=>console.warn('[控え] 読み込みに失敗', e));
 </script>
 </body>
 </html>
