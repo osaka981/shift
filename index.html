@@ -60,6 +60,12 @@
   /* ★ 2026-09-24.8: スマホ表示 */
   #sh-table td:first-child, #sh-table th:first-child{overflow:hidden;}
   #sh-table .cell{overflow:hidden;}
+  /* ★ 2026-11-14.29: 行の高さを固定する。
+     これまでは中身の多い行（他営業所の出勤・新人の注記など）だけ背が高くなり、
+     中身のない行（本社の役員など）が縮んで、ひとりだけ狭く見えていた。
+     em で指定するので「拡大」を押しても比率は変わらない。
+     表のます目は高さを下限として扱うため、中身が多い行はこれまでどおり伸びる。 */
+  #sh-table tbody td{height:3.2em;}
   @media (max-width: 720px){
     header{padding:8px 10px;gap:6px;position:static;}
     h1{font-size:13px;}
@@ -93,7 +99,7 @@
 <header>
   <div>
     <h1>大阪急配　シフト表</h1>
-    <div class="ver" id="app-ver">ver 2026-11-13.28</div>
+    <div class="ver" id="app-ver">ver 2026-11-14.30</div>
   </div>
   <div class="row" style="margin-left:auto;">
     <select id="sh-off" class="fi" style="display:none;"></select>
@@ -225,7 +231,7 @@ document.dispatchEvent(new Event('fb-sdk-ready'));
 
 <script>
 'use strict';
-const APP_VER = '2026-11-13.28';
+const APP_VER = '2026-11-14.30';
 console.log('[シフト表] APP_VER', APP_VER);
 
 const FB_CONFIG = {
@@ -935,7 +941,20 @@ function spreadByDow(total, mon, fac, saleMap){
     raw.push(v); sum+=v;
   }
   if(!sum) return raw.map(()=>0);
-  return raw.map(v=>Math.round(total*v/sum));
+  /* ★ 2026-11-14.30: 合計をちょうど総数に合わせる。
+     これまでは日ごとに四捨五入するだけだったので、合計が総数から数個ずれていた
+     （42,000個の月で 41,996〜42,007 になっていた）。
+     いったん切り捨てて、余りの大きい日から1個ずつ足していく。
+     こうすると配り方の比率を崩さずに、合計がぴったり合う。 */
+  const exact = raw.map(v => total*v/sum);
+  const out   = exact.map(v => Math.floor(v));
+  let rest = Math.round(total - out.reduce((a,b)=>a+b,0));
+  if(rest > 0){
+    const order = exact.map((v,i)=>({i:i, f:v-Math.floor(v)}))
+                       .sort((a,b)=> (b.f-a.f) || (a.i-b.i));
+    for(let k=0; k<order.length && rest>0; k++){ out[order[k].i]++; rest--; }
+  }
+  return out;
 }
 function fillOffices(){
   const sel=$('sh-off'); if(!sel || _filling) return;
@@ -1211,7 +1230,22 @@ function renderPane(paneOffice, rootId, isMain){
     r3b+=`${pad}<td class="num"></td><td class="num"></td></tr>`;
     foot+=r1+r2+r2b+r3+r3b;
   }
+  /* ★ 2026-11-14.30: 係数が0（または空）の曜日があると、その曜日には予測が入らない。
+     そのぶんが他の曜日に寄って1日あたりが大きく見え、気づきにくいので画面で知らせる。
+     実績が1件もない曜日は係数が0になるため、手入力してもらう案内も出す。 */
+  const _DOWJ=['日','月','火','水','木','金','土'];
+  const _zeroDows = (total && !_hideForecast)
+    ? [0,1,2,3,4,5,6].filter(i=>!(Number(dw.f[i])>0)) : [];
+  const _zeroNote = _zeroDows.length ? `
+    <div class="xs" style="margin-bottom:6px;padding:6px 8px;border-radius:6px;
+      background:rgba(224,139,31,.12);border:1px solid rgba(224,139,31,.55);color:var(--txt);">
+      <b>${_zeroDows.map(i=>_DOWJ[i]).join('・')}曜の係数が入っていません。</b>
+      この曜日には予測が入らず、そのぶんが他の曜日に寄るため1日あたりが大きく出ます。
+      本当に配達していない曜日ならこのままで構いません。
+      配達している曜日なら「曜日で一括設定」から係数を入れてください。
+    </div>` : '';
   root.innerHTML=`
+    ${_zeroNote}
     ${total?`<div class="xs muted" style="margin-bottom:6px;">予測は月合計 ${total.toLocaleString()}個を曜日係数で配分
       ${dw.hasData?(dw.src&&dw.src.length?`（参照月 ${dw.src.join('・')} の実績）`:'（直近6か月の実績）'):'（実績が足りないため全曜日を同じ比率）'}。
       「対応（平均）」〜「対応（最大平均）」の幅に予測が収まっていれば足りている目安（橙字）。過不足の赤字は不足、青字は余力です。</div>`:''}
