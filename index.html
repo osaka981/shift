@@ -99,7 +99,7 @@
 <header>
   <div>
     <h1>大阪急配　シフト表</h1>
-    <div class="ver" id="app-ver">ver 2026-11-14.31</div>
+    <div class="ver" id="app-ver">ver 2026-11-14.32</div>
   </div>
   <div class="row" style="margin-left:auto;">
     <select id="sh-off" class="fi" style="display:none;"></select>
@@ -232,7 +232,7 @@ document.dispatchEvent(new Event('fb-sdk-ready'));
 
 <script>
 'use strict';
-const APP_VER = '2026-11-14.31';
+const APP_VER = '2026-11-14.32';
 console.log('[シフト表] APP_VER', APP_VER);
 
 const FB_CONFIG = {
@@ -377,7 +377,34 @@ async function initFirebase(){
       if(cb) cb();
     }, err=>console.warn('['+node+']', err && err.message));
   };
-  sub('staff_full','staff', render);
+  sub('staff_full','staff', ()=>{ mergeDrivers(); render(); });   /* ★ .32 台帳が来たら合わせ直す */
+
+  /* ★ 2026-11-14.32: 共有名簿（nikki/drivers）からも名簿を補う。
+     台帳（staff_full）は匿名では読めない（permission_denied）ので、
+     経営管理を入れていない端末＝スマホでは名簿が揃わず、
+     委託会社の方などが丸ごと出てこなかった。
+     共有名簿は匿名でも読め、口座・単価・生年月日は入っていない。
+     台帳が読めている端末では台帳を優先し、足りない人だけ共有名簿から足す。 */
+  onValue(ref(fbDB, 'nikki/drivers'), snap=>{
+    if(!snap.exists()) return;
+    const v = snap.val();
+    const raw = Array.isArray(v) ? v : (v ? Object.values(v) : []);
+    const add = raw.filter(Boolean).map(d=>({
+      id: d.id, empNo: d.empNo, name: d.name,
+      office: d.office, officeType: d.officeType,
+      subOffices: d.subOffices || [],
+      deptIds: d.deptIds || [], primaryDeptId: d.primaryDeptId,
+      /* 共有名簿では委託会社が company。画面側は companyName を見るのでそろえる。
+         これが無いと、集荷の営業所で委託会社を外す判定が効かなくなる。 */
+      companyName: d.company || '', companyCode: d.companyCode || '',
+      status: (d.retired || d.active===false) ? '終了' : '在籍',
+      kyuyo: d.kyuyo, workType: d.workType, _fromDrivers: true
+    }));
+    D._drivers = add;
+    lsSet('nikki_drivers', add);   /* オフラインでも使えるよう控える */
+    mergeDrivers();
+    render();
+  }, err=>console.warn('[drivers]', err && err.message));
   sub('locations','locations', fillOffices);
   sub('departments','departments', fillOffices);
   sub('delivery','delivery', render);
@@ -641,6 +668,26 @@ function cellLabel(office, v){
 }
 // ★ 2026-09-24.12: 表示順と非表示は営業所ごとに設定として保存する
 function staffKey(st){ return String(st.empNo||st.id); }
+
+/* ★ 2026-11-14.32: 台帳（staff_full）と共有名簿（drivers）を合わせる。
+   台帳にいる人はそのまま。台帳に無い人だけ共有名簿から足す。
+   並び順・非表示の設定は staffKey（社員番号）で引くので、
+   どちらから来た人でも同じ鍵になり、設定はそのまま効く。 */
+function mergeDrivers(){
+  const add = D._drivers || [];
+  if(!add.length) return;
+  const base = (D.staff || []).filter(s => s && !s._fromDrivers);   // 台帳のぶんだけ残す
+  /* 台帳と共有名簿で id の形が違う人がいる（台帳は内部の番号、共有名簿は社員番号）。
+     社員番号で引くので普段はそろうが、社員番号が無い人のために氏名でも照合する。 */
+  const have   = new Set(base.map(staffKey));
+  const byName = new Set(base.map(s => String(s.name||'').replace(/\s+/g,'')).filter(Boolean));
+  const extra = add.filter(d => d
+    && !have.has(staffKey(d))
+    && !byName.has(String(d.name||'').replace(/\s+/g,'')));
+  if(!extra.length && base.length === (D.staff||[]).length) return;
+  D.staff = base.concat(extra);
+  if(extra.length) console.log('[名簿] 共有名簿から '+extra.length+'名を補いました（台帳 '+base.length+'名）');
+}
 function orderOf(office){ return (D.settings?.order||{})[office] || []; }
 function hiddenOf(office){ return (D.settings?.hidden||{})[office] || []; }
 let _showHidden=false;
@@ -3047,6 +3094,11 @@ _idbBoot().then(()=>{
   n += fill('settings',   'nikki_shift_settings',{});
   n += fill('drafts',     'nikki_shift_drafts',  {});
   n += fill('saleEvents', 'nikki_sale_events',   []);
+  /* ★ 2026-11-14.32: 共有名簿の控えも読み、台帳に足りない人を補う */
+  try{
+    const dv = lsGet('nikki_drivers', []);
+    if(Array.isArray(dv) && dv.length){ D._drivers = dv; mergeDrivers(); }
+  }catch(e){}
   console.log('[控え] 画面に入れ直しました '+n+'種類　従事員 '+(D.staff||[]).length+'名');
   try{ fillOffices(); }catch(e){}
   try{ render(); }catch(e){}
