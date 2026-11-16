@@ -99,7 +99,7 @@
 <header>
   <div>
     <h1>大阪急配　シフト表</h1>
-    <div class="ver" id="app-ver">ver 2026-11-16.34</div>
+    <div class="ver" id="app-ver">ver 2026-11-16.35</div>
   </div>
   <div class="row" style="margin-left:auto;">
     <select id="sh-off" class="fi" style="display:none;"></select>
@@ -232,7 +232,7 @@ document.dispatchEvent(new Event('fb-sdk-ready'));
 
 <script>
 'use strict';
-const APP_VER = '2026-11-16.34';
+const APP_VER = '2026-11-16.35';
 console.log('[シフト表] APP_VER', APP_VER);
 
 const FB_CONFIG = {
@@ -721,6 +721,28 @@ function mergeDrivers(){
 }
 function orderOf(office){ return (D.settings?.order||{})[office] || []; }
 function hiddenOf(office){ return (D.settings?.hidden||{})[office] || []; }
+
+/* ★ 2026-11-16.35: 非表示の設定に、名簿から消えた人の取り残しがたまる。
+   辞めた人や社員番号が変わった人の設定が残り、「非表示の◯名」の数が
+   実際に隠れている人数と合わなくなっていた（西成で11件中2件が取り残し）。
+
+   いま名簿にいる人のぶんだけ数える。名簿がまだ読めていないときは
+   数えようがないので、取り残しの判定はせず全部そのまま返す。
+   （読み込み途中に「取り残し」と見なして消してしまうのを防ぐため） */
+function _hiddenLive(office){
+  const hid = hiddenOf(office);
+  if(!hid.length) return hid;
+  const all = D.staff || [];
+  if(!all.length) return hid;                 // 名簿が無いときは判定しない
+  const keys = new Set(all.map(staffKey));
+  return hid.filter(k => keys.has(String(k)));
+}
+/* 取り残しだけを返す（掃除のときに使う） */
+function _hiddenStale(office){
+  const hid = hiddenOf(office);
+  const live = _hiddenLive(office);
+  return hid.filter(k => !live.includes(k));
+}
 let _showHidden=false;
 let _hideRowBtns = (()=>{ try{ return localStorage.getItem('shift_hide_btns')==='1'; }catch(e){ return false; } })();
 let _hideSaleBars = (()=>{ try{ return localStorage.getItem('shift_hide_bars')==='1'; }catch(e){ return false; } })();
@@ -878,7 +900,21 @@ function staffOf(office, all){
 async function saveStaffPrefs(office, order, hidden){
   const st={...(D.settings||{})};
   if(order){ st.order={...(st.order||{}), [office]:order}; }
-  if(hidden){ st.hidden={...(st.hidden||{}), [office]:hidden}; }
+  if(hidden){
+    /* ★ 2026-11-16.35: 保存するときに取り残しを落とす。
+       名簿が読めているときだけ。使っていくうちに自然にきれいになる。 */
+    let h = hidden;
+    const all = D.staff || [];
+    if(all.length){
+      const keys = new Set(all.map(staffKey));
+      const kept = h.filter(k => keys.has(String(k)));
+      if(kept.length !== h.length){
+        console.log('[非表示] 名簿にいない '+(h.length-kept.length)+'件を片付けました');
+        h = kept;
+      }
+    }
+    st.hidden={...(st.hidden||{}), [office]:h};
+  }
   D.settings=st;
   const ok=await fbSet('shift_settings', st);
   render();
@@ -1415,8 +1451,10 @@ function renderPane(paneOffice, rootId, isMain){
   const hint=$('sh-scroll-hint');
   if(hint) hint.style.display = (window.innerWidth<=720) ? 'block' : 'none';
   const hx=$('hdr-extra');
-  if(hx) hx.innerHTML = hiddenOf(office).length
-    ? `<button class="btn gh" style="padding:4px 8px;font-size:11px;" onclick="toggleShowHidden()">${_showHidden?'非表示の人を隠す':`非表示の ${hiddenOf(office).length}名 を表示`}</button>` : '';
+  /* ★ 2026-11-16.35: いま名簿にいる人だけ数える（取り残しは数に入れない） */
+  const _hl = _hiddenLive(office).length;
+  if(hx) hx.innerHTML = _hl
+    ? `<button class="btn gh" style="padding:4px 8px;font-size:11px;" onclick="toggleShowHidden()">${_showHidden?'非表示の人を隠す':`非表示の ${_hl}名 を表示`}</button>` : '';
 }
 // ★ 2026-09-24.13: セールを媒体ごとの帯で出す（連続する期間は1本の帯、中に名称）
 function saleBarsHTML(mon){
