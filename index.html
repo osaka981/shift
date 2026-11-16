@@ -99,7 +99,7 @@
 <header>
   <div>
     <h1>大阪急配　シフト表</h1>
-    <div class="ver" id="app-ver">ver 2026-11-16.33</div>
+    <div class="ver" id="app-ver">ver 2026-11-16.34</div>
   </div>
   <div class="row" style="margin-left:auto;">
     <select id="sh-off" class="fi" style="display:none;"></select>
@@ -232,7 +232,7 @@ document.dispatchEvent(new Event('fb-sdk-ready'));
 
 <script>
 'use strict';
-const APP_VER = '2026-11-16.33';
+const APP_VER = '2026-11-16.34';
 console.log('[シフト表] APP_VER', APP_VER);
 
 const FB_CONFIG = {
@@ -2981,6 +2981,28 @@ function printSheet(withSale){
       ? 'display:flex;align-items:center;justify-content:flex-start;gap:2px;'
       : 'display:flex;align-items:center;justify-content:center;gap:2px;');
   });
+  /* ★ 2026-11-16.34: 印刷のときだけ、いちばん下に空の行を2行足す。
+     急に登録のない人がシフトに入ったとき、紙に手書きできるようにするため。
+     画面には出さない。いちばん下の行をそのまま写して中身だけ消すので、
+     ます目の数も列の幅も本物の行と同じになる。 */
+  const _tb = clone.querySelector('tbody');
+  const _lastRow = _tb && _tb.querySelector('tr:last-child');
+  if(_tb && _lastRow){
+    for(let i=0;i<2;i++){
+      const tr = _lastRow.cloneNode(true);
+      tr.removeAttribute('data-k');
+      tr.removeAttribute('draggable');
+      [...tr.children].forEach(td=>{
+        td.textContent = '';                       // 中身を消して書ける欄にする
+        td.removeAttribute('data-k');
+        td.removeAttribute('data-d');
+        /* 土日祝の色は残したいので背景はそのまま。
+           名前の欄だけ、書きやすいように左寄せの空欄にする。 */
+      });
+      _tb.appendChild(tr);
+    }
+  }
+
   // セール予定のカレンダー（任意）
   // ★ 2026-09-25.27: セール予定は係数を出さず、白黒でも読めるように枠線と濃淡で表す
   let saleHtml='';
