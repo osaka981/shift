@@ -99,7 +99,7 @@
 <header>
   <div>
     <h1>大阪急配　シフト表</h1>
-    <div class="ver" id="app-ver">ver 2026-11-14.32</div>
+    <div class="ver" id="app-ver">ver 2026-11-16.33</div>
   </div>
   <div class="row" style="margin-left:auto;">
     <select id="sh-off" class="fi" style="display:none;"></select>
@@ -232,7 +232,7 @@ document.dispatchEvent(new Event('fb-sdk-ready'));
 
 <script>
 'use strict';
-const APP_VER = '2026-11-14.32';
+const APP_VER = '2026-11-16.33';
 console.log('[シフト表] APP_VER', APP_VER);
 
 const FB_CONFIG = {
@@ -377,7 +377,9 @@ async function initFirebase(){
       if(cb) cb();
     }, err=>console.warn('['+node+']', err && err.message));
   };
-  sub('staff_full','staff', ()=>{ mergeDrivers(); render(); });   /* ★ .32 台帳が来たら合わせ直す */
+  /* ★ 2026-11-16.33: 台帳が Firebase から届いた端末だけ _staffLive を立てる。
+     ここが立っていない端末（スマホ）は手元の控えが古いので、共有名簿を優先する。 */
+  sub('staff_full','staff', ()=>{ D._staffLive = true; mergeDrivers(); render(); });
 
   /* ★ 2026-11-14.32: 共有名簿（nikki/drivers）からも名簿を補う。
      台帳（staff_full）は匿名では読めない（permission_denied）ので、
@@ -670,23 +672,52 @@ function cellLabel(office, v){
 function staffKey(st){ return String(st.empNo||st.id); }
 
 /* ★ 2026-11-14.32: 台帳（staff_full）と共有名簿（drivers）を合わせる。
-   台帳にいる人はそのまま。台帳に無い人だけ共有名簿から足す。
    並び順・非表示の設定は staffKey（社員番号）で引くので、
-   どちらから来た人でも同じ鍵になり、設定はそのまま効く。 */
+   どちらから来た人でも同じ鍵になり、設定はそのまま効く。
+
+   ★ 2026-11-16.33: 古い控えより共有名簿を優先する場合を足した。
+   台帳が Firebase から読めない端末（スマホ）では、手元にあるのは
+   引っ越し前に保存された古い台帳の控えで、担当営業所や兼務が古いままになる。
+   そのせいで「堺営業所のみ」のころの姿が残り、西成郵便局の兼務が付いた人が
+   西成に出てこなかった。
+   Firebase から台帳が届いている端末では、これまでどおり台帳を優先する。 */
 function mergeDrivers(){
   const add = D._drivers || [];
   if(!add.length) return;
   const base = (D.staff || []).filter(s => s && !s._fromDrivers);   // 台帳のぶんだけ残す
   /* 台帳と共有名簿で id の形が違う人がいる（台帳は内部の番号、共有名簿は社員番号）。
      社員番号で引くので普段はそろうが、社員番号が無い人のために氏名でも照合する。 */
+  const nk = s => String(s && s.name || '').replace(/\s+/g,'');
   const have   = new Set(base.map(staffKey));
-  const byName = new Set(base.map(s => String(s.name||'').replace(/\s+/g,'')).filter(Boolean));
-  const extra = add.filter(d => d
-    && !have.has(staffKey(d))
-    && !byName.has(String(d.name||'').replace(/\s+/g,'')));
-  if(!extra.length && base.length === (D.staff||[]).length) return;
+  const byName = new Set(base.map(nk).filter(Boolean));
+
+  /* 台帳が今つながっている Firebase から届いていなければ、手元の台帳は古い控え。
+     その場合は、両方にいる人の「どこで働くか」の項目を共有名簿の値で上書きする。
+     氏名・社員番号や、共有名簿に無い項目はそのまま残す。 */
+  let fixed = 0;
+  if(!D._staffLive){
+    const byKey = new Map();
+    add.forEach(d=>{ if(d){ byKey.set(staffKey(d), d); const n=nk(d); if(n) byKey.set('n:'+n, d); } });
+    base.forEach((s,i)=>{
+      const d = byKey.get(staffKey(s)) || byKey.get('n:'+nk(s));
+      if(!d) return;
+      const before = JSON.stringify([s.office, s.subOffices, s.deptIds, s.primaryDeptId, s.companyName, s.status]);
+      const after  = JSON.stringify([d.office, d.subOffices, d.deptIds, d.primaryDeptId, d.companyName, d.status]);
+      if(before === after) return;
+      base[i] = Object.assign({}, s, {
+        office: d.office, officeType: d.officeType,
+        subOffices: d.subOffices, deptIds: d.deptIds, primaryDeptId: d.primaryDeptId,
+        companyName: d.companyName, companyCode: d.companyCode, status: d.status
+      });
+      fixed++;
+    });
+  }
+
+  const extra = add.filter(d => d && !have.has(staffKey(d)) && !byName.has(nk(d)));
+  if(!extra.length && !fixed && base.length === (D.staff||[]).length) return;
   D.staff = base.concat(extra);
   if(extra.length) console.log('[名簿] 共有名簿から '+extra.length+'名を補いました（台帳 '+base.length+'名）');
+  if(fixed)        console.log('[名簿] 古い控えの '+fixed+'名を共有名簿の内容に更新しました');
 }
 function orderOf(office){ return (D.settings?.order||{})[office] || []; }
 function hiddenOf(office){ return (D.settings?.hidden||{})[office] || []; }
